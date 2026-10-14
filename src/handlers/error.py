@@ -4,14 +4,10 @@ from __future__ import annotations
 
 import logging
 import sys
-from typing import TYPE_CHECKING
 
 from telegram import Update
 from telegram.constants import ParseMode
 from telegram.ext import ContextTypes
-
-if TYPE_CHECKING:
-    from src.bot import BotApplication
 
 logger = logging.getLogger(__name__)
 

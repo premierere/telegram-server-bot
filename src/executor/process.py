@@ -14,7 +14,6 @@ from __future__ import annotations
 import asyncio
 import os
 import signal
-import sys
 import time
 from dataclasses import dataclass
 from pathlib import Path
@@ -120,7 +119,7 @@ class ProcessExecutor:
 
         try:
             await asyncio.wait_for(process.wait(), timeout=self.grace_period_seconds)
-        except asyncio.TimeoutError:
+        except TimeoutError:
             # Stage 2: SIGKILL
             kill_process_tree(pid, SIGKILL)
             try:
@@ -212,7 +211,6 @@ class ProcessExecutor:
 
         is_timeout = False
         is_truncated = False
-        is_killed = False
 
         # Read streams asynchronously while monitoring limits
         stdout_task = asyncio.create_task(

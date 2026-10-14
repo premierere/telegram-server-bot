@@ -1,0 +1,76 @@
+[Unit]
+Description=Telegram Linux Server Administration Bot
+Documentation=https://github.com/your-org/telegram-server-bot
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=telegram-bot
+Group=telegram-bot
+WorkingDirectory=/var/lib/telegram-server-bot
+
+# Binary execution (adjust virtual environment path if using venv)
+ExecStart=/opt/telegram-server-bot/venv/bin/python -m src.main --config /etc/telegram-server-bot/config.yaml
+
+Restart=on-failure
+RestartSec=5s
+
+# Logging: output goes directly to systemd journal
+StandardOutput=journal
+StandardError=journal
+
+##############################################################################
+# SYSTEMD SECURITY SANDBOX & HARDENING DIRECTIVES
+##############################################################################
+
+# File system protections
+ProtectSystem=strict
+ProtectHome=yes
+PrivateTmp=yes
+PrivateDevices=yes
+ProtectKernelTunables=yes
+ProtectKernelModules=yes
+ProtectControlGroups=yes
+
+# Linux capabilities (drop all root/ambient capabilities)
+CapabilityBoundingSet=
+AmbientCapabilities=
+
+# Network & IPC isolation: only IPv4, IPv6, and local UNIX sockets
+RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX
+RestrictNamespaces=yes
+SystemCallFilter=@system-service
+SystemCallErrorNumber=EPERM
+
+# Resource limits (Defense against fork bombs and memory exhaust)
+MemoryMax=512M
+TasksMax=64
+CPUQuota=100%
+
+# Write access restricted strictly to state and log directories
+ReadWritePaths=/var/lib/telegram-server-bot /var/log/telegram-server-bot
+
+# Systemd Credential passing for Bot Token
+# Token is available to service at $CREDENTIALS_DIRECTORY/bot_token
+LoadCredential=bot_token:/etc/telegram-server-bot/bot_token
+
+##############################################################################
+# SUDO ELEVATION & PRIVILEGE TRANSITION NOTES
+##############################################################################
+# By default, NoNewPrivileges=yes prevents the process and its children from
+# gaining any new privileges (even if a binary has SUID bit or sudo is called).
+#
+# NẾU BẠN BẬT TÍNH NĂNG SUDO trong config.yaml (sudo.policy: "ask" hoặc "auto"):
+# Bạn BẮT BUỘC phải chuyển:
+#     NoNewPrivileges=no
+# Vì chương trình sudo yêu cầu cờ SUID để chuyển đổi ngữ cảnh người dùng.
+# Khi chuyển sang NoNewPrivileges=no, sự an toàn của hệ thống được bảo vệ bởi:
+# 1. Cấu hình sudoers nghiêm ngặt tại /etc/sudoers.d/telegram-bot (không wildcard, không ALL).
+# 2. Cơ chế xác thực TOTP 2FA bắt buộc.
+# 3. Hộp thoại xác nhận tương tác cấp quyền Sudo trước khi chạy.
+##############################################################################
+NoNewPrivileges=yes
+
+[Install]
+WantedBy=multi-user.target

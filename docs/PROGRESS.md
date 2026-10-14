@@ -40,9 +40,12 @@ Phương châm: *Security-First, Defense-in-Depth, Fail-Closed*
   - Kiểm thử: `tests/test_end_to_end.py`
   - Ghi chú: Đã xây dựng `src/messages.py` với toàn bộ câu thông báo bằng tiếng Việt; triển khai các handlers `/login`, `/logout`, `/run`, `/status`, `/whoami`, `/jobs`, `/kill`, `/help`; bộ điều phối gateway đa terminal với tiền tố dấu chấm (`.stop`, `.new`, `.t1..10`, v.v.); bộ xử lý callback xác nhận lệnh nguy hiểm và cấp quyền sudo tương tác; xử lý lỗi fail-closed toàn diện; kiểm thử tích hợp end-to-end không cần mạng mô phỏng đầy đủ chu trình.
 
-- [ ] **Milestone 8: Triển khai Cứng hóa (Hardening), Script TOTP & Tài liệu**
-  - Trạng thái: Chưa bắt đầu
-  - Cấu hình: `deploy/systemd/`, `deploy/sudoers.d/`, `docs/SECURITY.md`, `README.md`
+- [x] **Milestone 8: Triển khai Cứng hóa (Hardening), Script TOTP & Tài liệu**
+  - Trạng thái: Hoàn thành (1/1 test passed, tổng 65/65 tests passed)
+  - Kiểm thử: `tests/test_setup_totp.py`
+  - Ghi chú: Đã xây dựng `scripts/setup_totp.py` sinh mã TOTP offline an toàn; unit systemd `deploy/systemd/telegram-server-bot.service` với đầy đủ cờ bảo vệ sandbox nghiêm ngặt (`ProtectSystem=strict`, `CapabilityBoundingSet=` rỗng, `LoadCredential`, v.v.); mẫu `deploy/sudoers.d/telegram-bot` phân quyền exact-match không wildcard; tài liệu `deploy/CREDENTIALS.md`; tài liệu `docs/SECURITY.md` (mô hình đe dọa, ma trận 19 yêu cầu bảo mật, kịch bản ứng phó rò rỉ token) và `README.md` hướng dẫn sử dụng và triển khai chi tiết bằng tiếng Việt.
 
-- [ ] **Milestone 9: Rà soát 19 Yêu cầu Bảo mật, Kiểm thử Toàn diện & Linters**
-  - Trạng thái: Chưa bắt đầu
+- [x] **Milestone 9: Rà soát 19 Yêu cầu Bảo mật, Kiểm thử Toàn diện & Linters**
+  - Trạng thái: Hoàn thành (65/65 tests passed, 0 lint errors, 0 security issues)
+  - Công cụ: `pytest`, `ruff check`, `bandit`
+  - Ghi chú: Toàn bộ 65 unit & integration tests vượt qua 100%; linter Ruff kiểm tra đạt chuẩn chất lượng mã nguồn; Bandit quét bảo mật 0 lỗ hổng nghiêm trọng; xác nhận hoàn toàn không có secret/token nào bị lộ trong codebase và logs.

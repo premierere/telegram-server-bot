@@ -12,7 +12,6 @@ from __future__ import annotations
 
 import logging
 from pathlib import Path
-from typing import Any
 
 from telegram import Update
 from telegram.ext import (
@@ -30,7 +29,7 @@ from src.audit import AuditEvent, AuditLogger
 from src.auth.confirmation import ConfirmationManager
 from src.auth.session import SessionManager
 from src.auth.totp import TOTPManager
-from src.config import Config, load_config
+from src.config import Config
 from src.executor.jobs import JobManager
 from src.executor.native_bridge import NativeExecutionBridge
 from src.executor.terminals import TerminalGateway

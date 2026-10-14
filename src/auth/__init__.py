@@ -4,4 +4,4 @@ from src.auth.confirmation import ConfirmationManager, PendingConfirmation
 from src.auth.session import Session, SessionManager
 from src.auth.totp import TOTPManager
 
-__all__ = ["TOTPManager", "Session", "SessionManager", "ConfirmationManager", "PendingConfirmation"]
+__all__ = ["ConfirmationManager", "PendingConfirmation", "Session", "SessionManager", "TOTPManager"]

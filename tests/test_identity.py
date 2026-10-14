@@ -1,10 +1,8 @@
 """Tests for identity filtering, update isolation, and replay defense."""
 
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from typing import Any
 from unittest.mock import MagicMock
-
-import pytest
 
 from src.identity import CHAT_TYPE_PRIVATE, IdentityFilter
 
@@ -35,8 +33,8 @@ class DummyMessage:
         self.text = text
         self.from_user = DummyUser(user_id)
         self.chat = DummyChat(chat_id, chat_type)
-        now = timestamp if timestamp is not None else datetime.now(timezone.utc).timestamp()
-        self.date = datetime.fromtimestamp(now, tz=timezone.utc)
+        now = timestamp if timestamp is not None else datetime.now(UTC).timestamp()
+        self.date = datetime.fromtimestamp(now, tz=UTC)
         self.forward_origin = "origin" if is_forwarded else None
         self.forward_date = None
         self.forward_from = None

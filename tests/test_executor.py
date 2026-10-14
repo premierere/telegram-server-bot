@@ -2,11 +2,10 @@
 
 import os
 import sys
-from pathlib import Path
 
 import pytest
 
-from src.executor.process import ProcessExecutor, build_sanitized_env
+from src.executor.process import ProcessExecutor
 
 
 @pytest.mark.asyncio

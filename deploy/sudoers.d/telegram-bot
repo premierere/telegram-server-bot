@@ -1,0 +1,26 @@
+# /etc/sudoers.d/telegram-bot
+# Cấu hình phân quyền tối thiểu (Least Privilege) cho tài khoản dịch vụ telegram-bot.
+#
+# QUY TẮC BẢO MẬT BẮT BUỘC:
+# 1. KHÔNG BAO GIỜ cấp "ALL = (ALL) NOPASSWD: ALL" cho tài khoản này.
+# 2. KHÔNG sử dụng ký tự đại diện wildcard (*) trong đường dẫn tham số (tránh injection).
+# 3. Luôn chỉ định đường dẫn tuyệt đối đầy đủ tới tệp thực thi (/usr/bin/...).
+# 4. Quyền của tệp này trên hệ điều hành Linux PHẢI là 0440 (chown root:root; chmod 0440).
+#
+# Cú pháp mẫu:
+# <user> <host> = (<runas_user>) NOPASSWD: <exact_binary_command>
+
+# Cho phép khởi động lại dịch vụ nginx cụ thể
+telegram-bot ALL = (root) NOPASSWD: /usr/bin/systemctl restart nginx.service
+
+# Cho phép tải lại cấu hình dịch vụ nginx
+telegram-bot ALL = (root) NOPASSWD: /usr/bin/systemctl reload nginx.service
+
+# Cho phép đọc nhật ký journald của dịch vụ nginx mà không cần phân trang
+telegram-bot ALL = (root) NOPASSWD: /usr/bin/journalctl -u nginx.service --no-pager -n 100
+
+# Cho phép kiểm tra trạng thái tường lửa ufw
+telegram-bot ALL = (root) NOPASSWD: /usr/sbin/ufw status verbose
+
+# Cho phép dọn dẹp bộ nhớ đệm gói tin apt
+telegram-bot ALL = (root) NOPASSWD: /usr/bin/apt-get clean

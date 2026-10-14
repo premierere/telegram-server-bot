@@ -1,6 +1,5 @@
 """Tests for output sanitization, secret redaction, and ANSI stripping."""
 
-import pytest
 
 from src.redaction import (
     format_html_pre,

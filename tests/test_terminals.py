@@ -1,9 +1,6 @@
 """Tests for TerminalGateway, dot command parsing, and output pagination."""
 
-import html
 from pathlib import Path
-
-import pytest
 
 from src.executor.terminals import (
     MAX_TERMINALS,

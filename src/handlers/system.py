@@ -3,14 +3,13 @@
 from __future__ import annotations
 
 import time
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING
 
 from telegram import Update
 from telegram.constants import ParseMode
 from telegram.ext import ContextTypes
 
 from src import messages
-from src.audit import AuditEvent
 from src.executor.terminals import parse_dot_command
 
 if TYPE_CHECKING:

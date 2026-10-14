@@ -17,10 +17,11 @@ from __future__ import annotations
 import json
 import os
 import sys
+from collections.abc import Callable, Coroutine
 from dataclasses import asdict, dataclass, is_dataclass
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from pathlib import Path
-from typing import Any, Callable, Coroutine
+from typing import Any
 
 from src.redaction import redact_secrets
 
@@ -43,7 +44,7 @@ class AuditEvent:
 
     def __post_init__(self):
         if self.timestamp is None:
-            self.timestamp = datetime.now(timezone.utc).isoformat()
+            self.timestamp = datetime.now(UTC).isoformat()
         if self.command:
             self.command = redact_secrets(self.command)
 
@@ -74,7 +75,7 @@ class AuditLogger:
         elif isinstance(event, dict):
             data = dict(event)
             if "timestamp" not in data:
-                data["timestamp"] = datetime.now(timezone.utc).isoformat()
+                data["timestamp"] = datetime.now(UTC).isoformat()
         else:
             raise TypeError(f"Expected AuditEvent or dict, got {type(event)}")
 

@@ -1,6 +1,5 @@
 """Tests for JobManager: concurrency caps, rate limiting, and job termination."""
 
-import asyncio
 from unittest.mock import MagicMock
 
 import pytest
@@ -19,6 +18,7 @@ def test_concurrency_cap():
 
     # Register 2nd job
     job2 = mgr.register_job(user_id=1001, command_display="free -m")
+    assert job2.job_id is not None
     # Slot cap reached
     assert mgr.can_acquire_slot() is False
 

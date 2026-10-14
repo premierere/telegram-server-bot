@@ -3,4 +3,4 @@
 from src.executor.jobs import Job, JobManager
 from src.executor.process import ExecutionResult, ProcessExecutor
 
-__all__ = ["ProcessExecutor", "ExecutionResult", "Job", "JobManager"]
+__all__ = ["ExecutionResult", "Job", "JobManager", "ProcessExecutor"]

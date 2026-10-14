@@ -1,8 +1,7 @@
 """Tests for in-memory session management, idle timeouts, and absolute timeouts."""
 
-import pytest
 
-from src.auth.session import Session, SessionManager
+from src.auth.session import SessionManager
 
 
 def test_session_lifecycle():

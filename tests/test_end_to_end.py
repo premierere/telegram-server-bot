@@ -10,17 +10,15 @@ Tests all 19 security requirements and functional requirements end-to-end:
 - Audit log integrity and zero secret leakage.
 """
 
-import asyncio
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
-from unittest.mock import AsyncMock, MagicMock, patch
+from unittest.mock import MagicMock
 
 import pyotp
 import pytest
 import yaml
 
-from src import messages
 from src.bot import BotApplication
 from src.config import Config, LimitsConfig, SudoConfig, UserConfig
 
@@ -58,8 +56,8 @@ class FakeMessage:
         self.message_id = message_id
         self.from_user = MagicMock(id=user_id)
         self.chat = chat
-        now = timestamp if timestamp is not None else datetime.now(timezone.utc).timestamp()
-        self.date = datetime.fromtimestamp(now, tz=timezone.utc)
+        now = timestamp if timestamp is not None else datetime.now(UTC).timestamp()
+        self.date = datetime.fromtimestamp(now, tz=UTC)
         self.forward_origin = "origin" if is_forwarded else None
         self.forward_date = None
         self.forward_from = None
@@ -166,8 +164,6 @@ async def test_end_to_end_flow(test_setup):
     from src.handlers.command import confirmation_callback_handler, run_handler
     from src.handlers.system import (
         dot_command_dispatcher,
-        help_handler,
-        jobs_handler,
         whoami_handler,
     )
 
@@ -238,6 +234,7 @@ async def test_end_to_end_flow(test_setup):
     callback_data = button.callback_data
     assert callback_data.startswith("confirm:")
     nonce = callback_data.split(":")[1]
+    assert len(nonce) > 0
 
     # 9. Confirm dangerous execution
     cb_query = FakeCallbackQuery(data=callback_data, user_id=1001, chat=chat, message_id=chat.sent_messages[-1]["message_id"])

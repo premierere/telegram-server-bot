@@ -12,7 +12,6 @@ import asyncio
 import secrets
 import time
 from dataclasses import dataclass
-from typing import Any
 
 from src.executor.process import kill_process_tree
 

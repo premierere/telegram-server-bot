@@ -1,6 +1,5 @@
 """Tests for dangerous command confirmation, nonce binding, and tamper resistance."""
 
-import pytest
 
 from src.auth.confirmation import ConfirmationManager, compute_command_hash
 

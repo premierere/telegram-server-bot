@@ -12,7 +12,8 @@ Strictly enforces:
 from __future__ import annotations
 
 import time
-from typing import Any, Callable
+from collections.abc import Callable
+from typing import Any
 
 # Use constants to avoid hard dependency on telegram types during standalone unit testing
 CHAT_TYPE_PRIVATE = "private"

@@ -11,7 +11,7 @@ from __future__ import annotations
 
 import re
 import time
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from pathlib import Path
 
 import pyotp
@@ -135,7 +135,7 @@ class TOTPManager:
         # 5. Verify RFC 6238 TOTP
         try:
             totp = pyotp.TOTP(secret)
-            dt_now = datetime.fromtimestamp(now, tz=timezone.utc)
+            dt_now = datetime.fromtimestamp(now, tz=UTC)
             is_valid = totp.verify(code, for_time=dt_now, valid_window=self.max_drift_steps)
         except Exception:
             self.record_failure(user_id, now)

@@ -20,7 +20,7 @@ import time
 from dataclasses import dataclass, field
 from enum import Enum
 from pathlib import Path
-from typing import Any, Callable
+from typing import Any
 
 from src.executor.process import kill_process_tree
 

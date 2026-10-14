@@ -10,7 +10,6 @@ import yaml
 from src.config import (
     Config,
     ConfigurationError,
-    LimitsConfig,
     SecurityError,
     check_file_permissions,
     check_root_user,
