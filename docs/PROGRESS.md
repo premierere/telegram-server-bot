@@ -20,9 +20,10 @@ Phương châm: *Security-First, Defense-in-Depth, Fail-Closed*
   - Kiểm thử: `tests/test_auth_totp.py`, `tests/test_session.py`
   - Ghi chú: Đã xây dựng xác thực TOTP RFC 6238, độ lệch tối đa 1 bước (30s), chặn replay mã OTP, khóa tài khoản sau 5 lần sai với exponential backoff, session thuần bộ nhớ RAM với idle timeout (10 phút) và absolute timeout (1 giờ).
 
-- [ ] **Milestone 4: Công cụ Chính sách (Policy Engine) & Xác nhận Lệnh Nguy hiểm**
-  - Trạng thái: Chưa bắt đầu
+- [x] **Milestone 4: Công cụ Chính sách (Policy Engine) & Xác nhận Lệnh Nguy hiểm**
+  - Trạng thái: Hoàn thành (12/12 tests passed, tổng 41/41)
   - Kiểm thử: `tests/test_policy.py`, `tests/test_confirmation.py`
+  - Ghi chú: Đã xây dựng Policy Engine chế độ restricted (kiểm tra chặt chẽ regex/enum, triệt tiêu command injection), nhận diện mẫu lệnh nguy hiểm (rm, dd, mkfs, shutdown, iptables, pipe shell, fork bombs), cơ chế xác nhận lệnh dangerous ràng buộc SHA-256 hash, user ID, chat ID, message ID, nonce một lần và thời hạn 30 giây.
 
 - [ ] **Milestone 5: Bộ thực thi Tiến trình (Process Executor) & Quản lý Tác vụ (Jobs)**
   - Trạng thái: Chưa bắt đầu
