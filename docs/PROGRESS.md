@@ -49,3 +49,18 @@ Phương châm: *Security-First, Defense-in-Depth, Fail-Closed*
   - Trạng thái: Hoàn thành (65/65 tests passed, 0 lint errors, 0 security issues)
   - Công cụ: `pytest`, `ruff check`, `bandit`
   - Ghi chú: Toàn bộ 65 unit & integration tests vượt qua 100%; linter Ruff kiểm tra đạt chuẩn chất lượng mã nguồn; Bandit quét bảo mật 0 lỗ hổng nghiêm trọng; xác nhận hoàn toàn không có secret/token nào bị lộ trong codebase và logs.
+
+- [x] **Milestone 10: Shell Tương tác Dòng lệnh (Interactive Line-by-Line Shell) & Đa Terminal PTY**
+  - Trạng thái: Hoàn thành (80/80 tests passed, 0 lint errors, 0 security issues)
+  - Kiểm thử: `tests/test_auth_state.py`, `tests/test_pam_verifier.py`, `tests/test_pty_session.py`, `tests/test_slash_terminals.py`, `tests/test_direct_execution.py`, `tests/test_end_to_end.py`
+  - Ghi chú:
+    - Loại bỏ tiền tố `/run`, cho phép gửi lệnh trực tiếp vào shell terminal đang hoạt động.
+    - Quy trình xác thực nhiều bước an toàn: `/login <TOTP>` -> Nhập tài khoản Linux -> Nhập mật khẩu Linux.
+    - Zero persistent storage: Mật khẩu xác thực trực tiếp qua Linux PAM (`su`), xóa tin nhắn mật khẩu tức thì trên Telegram, không ghi ra đĩa hay lưu trong RAM.
+    - Cơ chế thử sai 5 lần: Nhập sai mật khẩu < 5 lần cho phép nhập lại, sai liên tiếp 5 lần tự động lùi về bước nhập tài khoản Linux.
+    - Quản lý tối đa 10 terminal ảo độc lập, mỗi terminal có thể chạy dưới một tài khoản Linux riêng biệt (ví dụ `root`, `guest`).
+    - Lệnh `/new`: Mở terminal cho tài khoản hiện tại không cần mật khẩu. Lệnh `/new <user>`: Yêu cầu mật khẩu của user trước khi cấp terminal.
+    - Chuyển toàn bộ điều khiển terminal sang slash commands (`/stop`, `/new [user]`, `/t1`..`/t10`, `/terminals`, `/close`).
+    - Định dạng prompt terminal phản ánh trạng thái thực: `Terminal<N> - <thời gian đăng nhập>\n<prompt pty>`.
+    - Phân định rõ ràng: `/logout` (đóng terminal, giữ session TOTP, về bước nhập user) và `/exit` (thoát hoàn toàn, xóa phiên).
+

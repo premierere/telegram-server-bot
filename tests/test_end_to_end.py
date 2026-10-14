@@ -152,6 +152,9 @@ def test_setup(tmp_path: Path):
     )
 
     app = BotApplication(config)
+    app.pam_verifier.mock_backend = True
+    app.pam_verifier.set_mock_account("ubuntu", "UbuntuPass123!")
+    app.pam_verifier.set_mock_account("guest", "GuestPass123!")
     return app, secret, audit_file
 
 
@@ -160,10 +163,18 @@ async def test_end_to_end_flow(test_setup):
     app, secret, audit_file = test_setup
     chat = FakeChat(chat_id=1001)
 
-    from src.handlers.auth import login_handler, logout_handler
-    from src.handlers.command import confirmation_callback_handler, run_handler
+    from src.auth.state import AuthStage
+    from src.handlers.auth import exit_handler, login_handler, logout_handler
+    from src.handlers.command import (
+        confirmation_callback_handler,
+        direct_text_dispatcher,
+    )
     from src.handlers.system import (
-        dot_command_dispatcher,
+        close_handler,
+        new_terminal_handler,
+        stop_handler,
+        switch_terminal_handler,
+        terminals_handler,
         whoami_handler,
     )
 
@@ -177,14 +188,13 @@ async def test_end_to_end_flow(test_setup):
     assert is_valid is False
     assert reason == "unknown_sender"
 
-    # 2. Command before login is denied
-    pre_login_msg = FakeMessage("/run uptime", 1001, chat)
+    # 2. Command or text before login is denied
+    pre_login_msg = FakeMessage("uptime", 1001, chat)
     pre_login_update = FakeUpdate(message=pre_login_msg)
-    context.args = ["uptime"]
-    await run_handler(pre_login_update, context)
+    await direct_text_dispatcher(pre_login_update, context)
     assert "chưa đăng nhập" in chat.sent_messages[-1]["text"].lower()
 
-    # 3. Login with wrong code fails
+    # 3. Login with wrong TOTP code fails
     wrong_login_msg = FakeMessage("/login 000000", 1001, chat)
     wrong_login_update = FakeUpdate(message=wrong_login_msg)
     context.args = ["000000"]
@@ -192,15 +202,15 @@ async def test_end_to_end_flow(test_setup):
     assert "không chính xác" in chat.sent_messages[-1]["text"].lower()
     assert wrong_login_msg.deleted is True
 
-    # 4. Login with valid TOTP succeeds
+    # 4. Login with valid TOTP advances to AWAITING_USERNAME
     totp = pyotp.TOTP(secret)
     valid_code = totp.now()
     valid_login_msg = FakeMessage(f"/login {valid_code}", 1001, chat)
     valid_login_update = FakeUpdate(message=valid_login_msg)
     context.args = [valid_code]
     await login_handler(valid_login_update, context)
-    assert "đăng nhập thành công" in chat.sent_messages[-1]["text"].lower()
-    assert app.session_manager.get_session(1001) is not None
+    assert app.auth_state_manager.get_stage(1001) == AuthStage.AWAITING_USERNAME
+    assert "tên tài khoản" in chat.sent_messages[-1]["text"].lower()
 
     # 5. Replaying the same TOTP code is rejected
     replay_msg = FakeMessage(f"/login {valid_code}", 1001, chat)
@@ -208,24 +218,46 @@ async def test_end_to_end_flow(test_setup):
     await login_handler(replay_update, context)
     assert "đã được sử dụng" in chat.sent_messages[-1]["text"].lower()
 
-    # 6. /whoami displays active status
+    # 6. Enter Linux username -> advances to AWAITING_PASSWORD
+    user_msg = FakeMessage("ubuntu", 1001, chat)
+    await direct_text_dispatcher(FakeUpdate(message=user_msg), context)
+    assert app.auth_state_manager.get_stage(1001) == AuthStage.AWAITING_PASSWORD
+    assert "mật khẩu" in chat.sent_messages[-1]["text"].lower()
+
+    # 7. Enter wrong password -> deleted, count 1/5
+    bad_pw = FakeMessage("WrongPass", 1001, chat)
+    await direct_text_dispatcher(FakeUpdate(message=bad_pw), context)
+    assert bad_pw.deleted is True
+    assert "1/5" in chat.sent_messages[-1]["text"]
+    assert app.auth_state_manager.get_stage(1001) == AuthStage.AWAITING_PASSWORD
+
+    # 8. Enter correct password -> deleted, authenticated, Terminal 1 opened
+    good_pw = FakeMessage("UbuntuPass123!", 1001, chat)
+    await direct_text_dispatcher(FakeUpdate(message=good_pw), context)
+    assert good_pw.deleted is True
+    assert app.auth_state_manager.get_stage(1001) == AuthStage.AUTHENTICATED
+    assert app.session_manager.get_session(1001) is not None
+    assert "Terminal1 -" in chat.sent_messages[-1]["text"]
+    assert "ubuntu@" in chat.sent_messages[-1]["text"]
+
+    # 9. /whoami displays active status
     whoami_msg = FakeMessage("/whoami", 1001, chat)
     whoami_update = FakeUpdate(message=whoami_msg)
     await whoami_handler(whoami_update, context)
     assert "SHELL" in chat.sent_messages[-1]["text"]
     assert "Đang hoạt động" in chat.sent_messages[-1]["text"]
 
-    import sys
-    # 7. Safe command executes
-    run_msg = FakeMessage(f'/run "{sys.executable}" -c "print(100 + 200)"', 1001, chat)
+    # 10. Direct execution: text sent directly without /run
+    run_msg = FakeMessage("echo 300", 1001, chat)
     run_update = FakeUpdate(message=run_msg)
-    await run_handler(run_update, context)
+    await direct_text_dispatcher(run_update, context)
     assert "300" in chat.sent_messages[-1]["text"]
+    assert "Terminal1 -" in chat.sent_messages[-1]["text"]
 
-    # 8. Dangerous command triggers confirmation dialog
-    danger_msg = FakeMessage("/run rm -rf /srv/app/old_releases", 1001, chat)
+    # 11. Dangerous command triggers confirmation dialog
+    danger_msg = FakeMessage("rm -rf /srv/app/old_releases", 1001, chat)
     danger_update = FakeUpdate(message=danger_msg)
-    await run_handler(danger_update, context)
+    await direct_text_dispatcher(danger_update, context)
     assert "CẢNH BÁO LỆNH NGUY HIỂM" in chat.sent_messages[-1]["text"]
     assert chat.sent_messages[-1]["reply_markup"] is not None
 
@@ -233,53 +265,78 @@ async def test_end_to_end_flow(test_setup):
     button = chat.sent_messages[-1]["reply_markup"].inline_keyboard[0][0]
     callback_data = button.callback_data
     assert callback_data.startswith("confirm:")
-    nonce = callback_data.split(":")[1]
-    assert len(nonce) > 0
 
-    # 9. Confirm dangerous execution
+    # 12. Confirm dangerous execution
     cb_query = FakeCallbackQuery(data=callback_data, user_id=1001, chat=chat, message_id=chat.sent_messages[-1]["message_id"])
     cb_update = FakeUpdate(callback_query=cb_query)
     await confirmation_callback_handler(cb_update, context)
 
-    # 10. Replaying callback query is rejected
+    # 13. Replaying callback query is rejected
     await confirmation_callback_handler(cb_update, context)
 
-    # 11. Dot commands (.new, .t1..10, .stop)
-    new_t_msg = FakeMessage(".new", 1001, chat)
-    new_t_update = FakeUpdate(message=new_t_msg)
-    await dot_command_dispatcher(new_t_update, context)
-    assert "Terminal mới #2" in chat.sent_messages[-1]["text"]
+    # 14. Multi-user terminal gateway via slash commands
+    # /new guest prompts password for guest
+    new_t_msg = FakeMessage("/new guest", 1001, chat)
+    context.args = ["guest"]
+    await new_terminal_handler(FakeUpdate(message=new_t_msg), context)
+    assert app.auth_state_manager.get_stage(1001) == AuthStage.AWAITING_NEW_TERMINAL_PASSWORD
 
-    switch_msg = FakeMessage(".t1", 1001, chat)
-    switch_update = FakeUpdate(message=switch_msg)
-    await dot_command_dispatcher(switch_update, context)
-    assert "chuyển sang Terminal #1" in chat.sent_messages[-1]["text"]
+    guest_pw = FakeMessage("GuestPass123!", 1001, chat)
+    await direct_text_dispatcher(FakeUpdate(message=guest_pw), context)
+    assert guest_pw.deleted is True
+    assert app.auth_state_manager.get_stage(1001) == AuthStage.AUTHENTICATED
+    assert "Terminal2 -" in chat.sent_messages[-1]["text"]
+    assert "guest@" in chat.sent_messages[-1]["text"]
 
-    stop_msg = FakeMessage(".stop", 1001, chat)
-    stop_update = FakeUpdate(message=stop_msg)
-    await dot_command_dispatcher(stop_update, context)
+    # /terminals lists both terminals
+    await terminals_handler(FakeUpdate(message=FakeMessage("/terminals", 1001, chat)), context)
+    assert "Terminal #1" in chat.sent_messages[-1]["text"]
+    assert "Terminal #2" in chat.sent_messages[-1]["text"]
+
+    # /t1 switches to terminal 1
+    await switch_terminal_handler(FakeUpdate(message=FakeMessage("/t1", 1001, chat)), context, terminal_num=1)
+    assert "Terminal1 -" in chat.sent_messages[-1]["text"]
+
+    # /stop sends interrupt
+    await stop_handler(FakeUpdate(message=FakeMessage("/stop", 1001, chat)), context)
     assert "Đã gửi tín hiệu ngắt" in chat.sent_messages[-1]["text"]
 
-    # 12. Restricted mode user (1002) injection is blocked
+    # /close 2 closes terminal 2
+    context.args = ["2"]
+    await close_handler(FakeUpdate(message=FakeMessage("/close 2", 1001, chat)), context)
+    assert "Đã đóng Terminal #2" in chat.sent_messages[-1]["text"]
+
+    # 15. Restricted mode user (1002) injection is blocked
     chat_1002 = FakeChat(chat_id=1002)
-    # Login user 1002
     (Path(app.config.totp_dir) / "1002.secret").write_text(secret, encoding="utf-8")
     app.session_manager.create_session(1002)
+    app.auth_state_manager.complete_authentication(1002, "ubuntu")
 
-    injection_msg = FakeMessage("/run service_status nginx.service; rm -rf /", 1002, chat_1002)
+    injection_msg = FakeMessage("service_status nginx.service; rm -rf /", 1002, chat_1002)
     injection_update = FakeUpdate(message=injection_msg)
-    await run_handler(injection_update, context)
+    await direct_text_dispatcher(injection_update, context)
     assert "chính sách an toàn" in chat_1002.sent_messages[-1]["text"].lower()
 
-    # 13. Logout ends session
+    # 16. /logout keeps TOTP session, reverts to username entry
     logout_msg = FakeMessage("/logout", 1001, chat)
     logout_update = FakeUpdate(message=logout_msg)
     await logout_handler(logout_update, context)
     assert "đã đăng xuất" in chat.sent_messages[-1]["text"].lower()
-    assert app.session_manager.get_session(1001) is None
+    assert app.auth_state_manager.get_stage(1001) == AuthStage.AWAITING_USERNAME
 
-    # 14. Audit log file verification: ensure ZERO raw secrets in entire file
+    # 17. /exit terminates session completely
+    exit_msg = FakeMessage("/exit", 1001, chat)
+    exit_update = FakeUpdate(message=exit_msg)
+    await exit_handler(exit_update, context)
+    assert "đã thoát hoàn toàn" in chat.sent_messages[-1]["text"].lower()
+    assert app.session_manager.get_session(1001) is None
+    assert app.auth_state_manager.get_stage(1001) == AuthStage.UNAUTHENTICATED
+
+    # 18. Audit log file verification: ensure ZERO raw secrets in entire file
     audit_content = audit_file.read_text(encoding="utf-8")
     assert secret not in audit_content
+    assert app.config.bot_token not in audit_content
+    assert "UbuntuPass123!" not in audit_content
+    assert "GuestPass123!" not in audit_content
     assert app.config.bot_token not in audit_content
     assert "service_started" not in audit_content or "ABC_FAKE" not in audit_content

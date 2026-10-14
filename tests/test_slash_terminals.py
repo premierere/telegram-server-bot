@@ -1,10 +1,10 @@
 """Tests for slash command gateway controls (/stop, /new, /t1..10, /terminals, /close, /logout, /exit)."""
 
-from unittest.mock import AsyncMock, MagicMock
+from unittest.mock import MagicMock
 
 import pytest
 
-from src.auth.state import AuthStage, AuthStateManager
+from src.auth.state import AuthStage
 from src.bot import BotApplication
 from src.config import Config, LimitsConfig, SudoConfig, UserConfig
 from tests.test_end_to_end import FakeChat, FakeMessage, FakeUpdate

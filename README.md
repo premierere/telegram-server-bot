@@ -9,22 +9,39 @@ Công cụ quản trị máy chủ Linux an toàn qua Telegram Bot, được thi
 - **Kiến trúc Hybrid Tối ưu Tốc độ & Bảo mật**:
   - **Lớp mạng & Giao diện (Python 3.12+ Asyncio)**: Tích hợp `python-telegram-bot` v21.x chạy chế độ **Long Polling** thuần outbound HTTPS (máy chủ không cần mở bất kỳ cổng mạng inbound nào).
   - **Lõi thực thi tiến trình (Native C Core - `server_executor.c`)**: Tối ưu tốc độ thực thi, quản lý luồng dữ liệu (streaming pipe), cô lập process group và dọn dẹp biến môi trường độc lập.
-- **Xác thực Đa yếu tố Bắt buộc (Mandatory 2FA)**:
-  - Sinh mã bí mật TOTP (RFC 6238) hoàn toàn offline trên máy chủ qua `scripts/setup_totp.py`.
-  - Tự động xóa tin nhắn chứa mã OTP trên Telegram ngay khi nhận được.
-  - Chống replay mã OTP cũ và tự động khóa tài khoản sau 5 lần nhập sai với cơ chế exponential backoff.
+- **Shell Tương tác Dòng lệnh (Line-by-Line Interactive Shell)**:
+  - **Không cần tiền tố `/run`**: Mọi tin nhắn văn bản thông thường đều được chuyển thẳng vào shell terminal đang kích hoạt.
+  - **Prompt biểu diễn chân thực từ PTY**: Định dạng chuẩn hóa phản ánh trạng thái tài khoản và môi trường:
+    ```text
+    Terminal<N> - <thời gian đăng nhập>
+    <prompt pty>
+    ```
+- **Xác thực Đa bước & Không Lưu Trữ Mật khẩu (Zero-Storage PAM)**:
+  - **Bước 1**: Nhập `/login <MÃ_OTP>` (RFC 6238). Tin nhắn OTP được xóa tự động.
+  - **Bước 2**: Nhập tên tài khoản Linux trên máy chủ (ví dụ: `ubuntu`, `root`, `guest`).
+  - **Bước 3**: Nhập mật khẩu Linux. Tin nhắn mật khẩu được xóa ngay lập tức trên Telegram. Mật khẩu được xác thực trực tiếp qua Linux PAM (`su`) và **hoàn toàn không bao giờ lưu trữ** trên đĩa hay trong bộ nhớ RAM (`zero persistent storage`).
+  - **Khóa thử sai thông minh**: Nếu nhập sai mật khẩu < 5 lần, bot cho phép thử lại. Nếu sai liên tiếp 5 lần, tự động chuyển về bước nhập tên tài khoản Linux.
+- **Gateway Đa Terminal Đa Người dùng (Multi-User Multi-Terminal Gateway)**:
+  - Hỗ trợ tối đa 10 terminal ảo hoạt động song song.
+  - Mỗi terminal có thể chạy dưới một tài khoản Linux độc lập (ví dụ: Terminal 1 là `ubuntu`, Terminal 2 là `guest`, Terminal 3 là `root`).
+  - `/new`: Mở terminal mới cho tài khoản hiện tại mà không cần nhập lại mật khẩu.
+  - `/new <tên_user>`: Yêu cầu nhập mật khẩu của user đó trước khi cấp phát terminal riêng biệt.
+- **Hệ thống Lệnh Slash (`/`) Đồng nhất**:
+  - Toàn bộ lệnh điều khiển gateway được dồn về tiền tố slash:
+  - `/stop`: Gửi tín hiệu ngắt (Ctrl+C / SIGINT) tới tiến trình đang chạy.
+  - `/new [user]`: Mở terminal mới cho user hiện tại hoặc user chỉ định.
+  - `/t1` .. `/t10`: Chuyển đổi nhanh giữa các terminal.
+  - `/terminals`: Liệt kê các terminal đang mở và tài khoản tương ứng.
+  - `/close [ID]`: Đóng terminal.
+- **Phân định Rõ ràng `/logout` và `/exit`**:
+  - `/logout`: Đóng các terminal đang mở, giữ nguyên phiên xác thực TOTP, quay lại bước chọn tài khoản Linux.
+  - `/exit`: Hủy toàn bộ phiên làm việc, xóa sạch trạng thái RAM, yêu cầu `/login <TOTP>` lại từ đầu.
 - **Ủy quyền Định danh Chặt chẽ**:
   - Chỉ cho phép các Numeric Telegram User ID được định nghĩa trong cấu hình máy chủ.
   - Từ chối phản hồi người lạ hoàn toàn (**Silent Drop**) và ghi nhật ký có kiểm soát tốc độ để tránh làm tràn đĩa.
   - Chống tấn công Replay tin nhắn bằng cách từ chối tin nhắn cũ hơn 60 giây và xóa tin nhắn chờ (`drop_pending_updates=True`) khi khởi động.
-- **Hai Chế độ Thực thi Linh hoạt & An toàn**:
-  - **Restricted Mode (Mặc định)**: Thực thi theo vector tham số (`argv`) không qua shell thông qua `policy.yaml`. Kiểm tra nghiêm ngặt kiểu dữ liệu bằng regex hoặc enum, triệt tiêu mọi nguy cơ chèn lệnh (Command Injection).
-  - **Shell Mode**: Cho phép chạy bash shell unprivileged đối với người dùng được cấp phép, có kèm bộ lọc cảnh báo lệnh nguy hiểm (rm, dd, mkfs, reboot, v.v.) yêu cầu xác nhận tương tác.
 - **Cấp quyền Sudo Tương tác (Interactive Sudo Elevation)**:
   - Hỗ trợ cấu hình `ask`: Khi tiến trình cần quyền root, bot gửi thông điệp xác nhận kèm nút bấm inline `[Cấp quyền Sudo]` / `[Từ chối]` (hiệu lực 30 giây, ràng buộc mã nonce duy nhất chống giả mạo).
-- **Gateway Đa Terminal (1 - 10 Terminals) & Bộ điều khiển Tiền tố Dấu chấm (`.`)**:
-  - Hỗ trợ mở tối đa 10 terminal ảo song song.
-  - Sử dụng các lệnh điều khiển nhanh: `.stop` (dừng tức thì luồng xuất dữ liệu tương tự Ctrl+C), `.new` (mở terminal mới), `.t1`..`.t10` (chuyển đổi giữa các terminal), `.terminals` (xem danh sách terminal).
 - **Phân trang Đầu ra & Làm sạch Dữ liệu**:
   - Tự động lọc bỏ mã màu ANSI escape.
   - Che giấu tự động các dữ liệu nhạy cảm (Bot token, SSH/RSA Private Keys, mật khẩu, AWS access keys).
@@ -124,43 +141,43 @@ sudo systemctl status telegram-server-bot.service
 
 Mở cuộc trò chuyện riêng (**Private Chat**) với Bot của bạn trên Telegram:
 
-### 1. Đăng nhập & Xác thực
-```text
-/login <MÃ_6_CHỮ_SỐ_TỪ_AUTHENTICATOR>
-```
-*Ví dụ: `/login 123456`. Tin nhắn chứa OTP sẽ được xóa ngay lập tức để bảo vệ phiên.*
+### 1. Quy trình Đăng nhập Đa bước An toàn
+1. **Bước 1**: Gõ `/login <MÃ_OTP>` (Ví dụ: `/login 123456`). Tin nhắn chứa mã OTP sẽ bị xóa ngay lập tức.
+2. **Bước 2**: Nhập tên tài khoản Linux trên máy chủ (ví dụ: `ubuntu`, `guest`, `root`).
+3. **Bước 3**: Nhập mật khẩu Linux của tài khoản. Tin nhắn chứa mật khẩu được xóa ngay tức thì. Sau khi xác thực PAM thành công, Terminal #1 sẽ được tự động kích hoạt.
 
-### 2. Thực thi Lệnh (`/run`)
-
-- **Chế độ Restricted (Mặc định)**:
+### 2. Thực thi Dòng lệnh Trực tiếp (Không cần `/run`)
+- Chỉ cần gõ trực tiếp câu lệnh vào khung chat Telegram:
   ```text
-  /run uptime
-  /run service_status nginx.service
+  uptime
+  free -m
+  df -h
+  docker ps
+  tail -n 20 /var/log/syslog
   ```
-- **Chế độ Shell (Nếu tài khoản được bật quyền)**:
+- Kết quả được trả về kèm biểu diễn prompt terminal thực:
   ```text
-  /run df -h
-  /run free -m
-  /run docker ps
+  Terminal1 - 14/10/2026 15:30:00
+  ubuntu@server:~$
   ```
 
-### 3. Hộp thoại Xác nhận Lệnh Nguy hiểm & Sudo
-- Nếu bạn nhập lệnh nguy hiểm (ví dụ `rm -rf`, `reboot`, `iptables -F`), bot sẽ hiển thị thông báo cảnh báo màu đỏ kèm 2 nút bấm: `[Xác nhận Thực thi]` và `[Hủy bỏ]`.
-- Nếu lệnh yêu cầu quyền Sudo và chế độ `sudo.policy` là `ask`, bot sẽ hiển thị `[Cấp quyền Sudo]` / `[Từ chối]`. Nút bấm có hiệu lực trong 30 giây.
+### 3. Quản lý Đa Terminal & Đa Tài khoản Linux
+- `/new`: Mở terminal mới cho tài khoản Linux hiện tại mà không cần nhập lại mật khẩu.
+- `/new <tên_user>`: Mở terminal mới dưới quyền một tài khoản Linux khác (ví dụ: `/new root`, `/new guest`). Bot sẽ yêu cầu nhập mật khẩu của tài khoản đó.
+- `/t1`, `/t2`, ... `/t10`: Chuyển đổi qua lại giữa các terminal 1 đến 10.
+- `/terminals`: Hiển thị danh sách các terminal đang hoạt động và tài khoản gắn liền.
+- `/stop`: Gửi tín hiệu ngắt (Ctrl+C / SIGINT) để dừng lệnh đang chạy trên terminal hiện tại.
+- `/close [ID]`: Đóng một terminal cụ thể hoặc terminal đang kích hoạt.
 
-### 4. Điều khiển Gateway Đa Terminal (Prefix dấu chấm `.`)
-- `.new` hoặc `.n`: Tạo một terminal ảo mới (tối đa 10 terminal).
-- `.t1`, `.t2`, ... `.t10`: Chuyển đổi giữa các terminal đang mở.
-- `.terminals`: Hiển thị danh sách terminal và thư mục làm việc hiện tại.
-- `.stop`: Dừng ngay lập tức tiến trình đang chạy và ngừng phân trang output (tương tự nhấn `Ctrl + C`).
-- `.close`: Đóng terminal hiện tại.
+### 4. Đăng xuất & Thoát
+- `/logout`: Đăng xuất khỏi tài khoản Linux, đóng các terminal, giữ lại phiên TOTP và quay lại bước nhập tên tài khoản Linux.
+- `/exit`: Thoát hoàn toàn khỏi hệ thống, hủy toàn bộ phiên làm việc trên RAM, yêu cầu `/login <TOTP>` lại từ đầu.
 
 ### 5. Quản lý Tác vụ & Trạng thái Hệ thống
-- `/whoami`: Xem ID người dùng, chế độ thực thi (`RESTRICTED` hoặc `SHELL`), thời gian session còn lại.
-- `/jobs`: Liệt kê các tiến trình dài hạn đang chạy trong hệ thống.
+- `/whoami`: Xem Telegram ID, tài khoản Linux hiện tại, thời gian phiên còn lại và terminal đang chọn.
+- `/jobs`: Liệt kê các tác vụ dài hạn đang chạy trong hệ thống.
 - `/kill <JOB_ID>`: Buộc dừng một tiến trình đang chạy bằng tín hiệu SIGTERM/SIGKILL.
 - `/status`: Kiểm tra trạng thái máy chủ (Uptime, tải CPU, bộ nhớ RAM).
-- `/logout`: Đăng xuất và hủy phiên làm việc ngay lập tức.
 
 ---
 

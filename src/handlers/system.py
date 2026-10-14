@@ -10,7 +10,6 @@ from telegram.constants import ParseMode
 from telegram.ext import ContextTypes
 
 from src import messages
-from src.executor.terminals import parse_dot_command
 
 if TYPE_CHECKING:
     from src.bot import BotApplication

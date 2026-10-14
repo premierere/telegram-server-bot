@@ -59,6 +59,10 @@ Do đó, kiến trúc bảo mật của hệ thống **KHÔNG PHỤ THUỘC** v�
 3. **Cấu hình Sudoers Exact-Match**: Chỉ cho phép thực thi chính xác đường dẫn tệp nhị phân được cấu hình trước trong `/etc/sudoers.d/telegram-bot`, tuyệt đối không có `ALL` và không có wildcard `*`.
 4. **Xác thực Hai Bước TOTP Offline**: Ngăn chặn hoàn toàn việc chiếm quyền điều khiển ngay cả khi phiên Telegram của người dùng bị lộ.
 5. **Nhật ký Kiểm toán Bất biến (Immutable Audit Trail)**: Mọi thao tác, dù thành công hay bị từ chối, đều được ghi vết tức thời vào journald của hệ điều hành.
+6. **Xác thực Hệ thống Không Lưu Trữ Mật khẩu (Zero-Storage PAM)**: Mật khẩu Linux của người dùng được chuyển trực tiếp qua pipe stdin tới hệ thống PAM (`su <user> -c true`), không bao giờ lưu trữ trong RAM, không ghi ra đĩa hay log kiểm toán.
+7. **Tự động Xóa Tin nhắn Chứa Mật khẩu trên Telegram**: Ngay khi nhận được tin nhắn mật khẩu hoặc mã OTP, bot lập tức gọi `deleteMessage` để xóa khỏi lịch sử chat và đám mây Telegram.
+8. **Kiểm soát Thử sai Đa tầng**: Sau khi vượt qua TOTP, nếu nhập sai mật khẩu Linux quá 5 lần, hệ thống tự động khóa và bắt đầu lại từ bước nhập tên tài khoản Linux.
+9. **Cô lập Đa Terminal Đa Người dùng (Multi-User PTY Isolation)**: Mỗi terminal ảo trong 10 terminal được phân bổ gắn chặt với một tài khoản Linux cụ thể, ngăn ngừa việc leo thang đặc quyền chéo giữa các phiên terminal.
 
 ---
 

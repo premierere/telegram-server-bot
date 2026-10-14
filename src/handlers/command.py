@@ -162,10 +162,39 @@ async def direct_text_dispatcher(update: Update, context: ContextTypes.DEFAULT_T
     user_config = app.config.users.get(user.id)
     user_mode = user_config.mode if user_config else "restricted"
 
+    # Restricted mode policy enforcement
+    if user_mode == "restricted":
+        tokens = raw_text.split()
+        cmd_name = tokens[0] if tokens else ""
+        cmd_args = tokens[1:]
+        success, resolved_argv, reason = app.policy_engine.validate_and_build_argv(cmd_name, cmd_args)
+        if not success:
+            event = AuditEvent(
+                user_id=user.id,
+                chat_id=chat.id,
+                message_id=message.message_id,
+                event_type="command_denied",
+                command=raw_text,
+                decision="denied",
+                reason=reason,
+            )
+            app.audit_logger.log(event)
+            await chat.send_message(
+                messages.MSG_RESTRICTED_REJECTED.format(reason=reason),
+                parse_mode=ParseMode.HTML,
+            )
+            return
+
     # Dangerous command confirmation for shell mode
     if user_mode != "restricted" and app.policy_engine.is_dangerous_shell_command(raw_text):
         await _prompt_dangerous_confirmation(app, chat, user, message, shell_command=raw_text)
         return
+
+    # Ensure an active terminal exists
+    active_term = app.pty_session_manager.get_active_terminal(user.id)
+    if not active_term:
+        active_user = app.auth_state_manager.get_active_username(user.id) or "root"
+        await app.pty_session_manager.create_terminal(user.id, active_user)
 
     # Execute in active PTY terminal session
     job = app.job_manager.register_job(user_id=user.id, command_display=raw_text)

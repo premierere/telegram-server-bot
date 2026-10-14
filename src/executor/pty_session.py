@@ -9,17 +9,12 @@ Captures real terminal prompts directly from PTY stream and formats them as:
 
 from __future__ import annotations
 
-import asyncio
-import os
-import re
-import signal
-import sys
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
-from src.executor.process import ExecutionResult, ProcessExecutor
+from src.executor.process import ProcessExecutor
 
 
 @dataclass

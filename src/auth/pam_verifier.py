@@ -10,7 +10,6 @@ from __future__ import annotations
 import asyncio
 import os
 import re
-import sys
 
 USERNAME_REGEX = re.compile(r"^[a-z_][a-z0-9_-]{0,31}$")
 
