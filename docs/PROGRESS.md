@@ -35,9 +35,10 @@ Phương châm: *Security-First, Defense-in-Depth, Fail-Closed*
   - Kiểm thử: `tests/test_redaction.py`, `tests/test_audit.py`
   - Ghi chú: Đã xây dựng bộ lọc ANSI escape, tự động che giấu Telegram Bot Token, Private Keys, mật khẩu key=value, Cloud Access Keys, TOTP codes; escape HTML; xuất nhật ký kiểm toán JSON Lines append-only và cảnh báo khẩn cấp tới quản trị viên qua Telegram.
 
-- [ ] **Milestone 7: Tích hợp Bot Handlers & Bản địa hóa Tiếng Việt**
-  - Trạng thái: Chưa bắt đầu
+- [x] **Milestone 7: Tích hợp Bot Handlers & Bản địa hóa Tiếng Việt**
+  - Trạng thái: Hoàn thành (1/1 e2e test passed, tổng 64/64 tests passed)
   - Kiểm thử: `tests/test_end_to_end.py`
+  - Ghi chú: Đã xây dựng `src/messages.py` với toàn bộ câu thông báo bằng tiếng Việt; triển khai các handlers `/login`, `/logout`, `/run`, `/status`, `/whoami`, `/jobs`, `/kill`, `/help`; bộ điều phối gateway đa terminal với tiền tố dấu chấm (`.stop`, `.new`, `.t1..10`, v.v.); bộ xử lý callback xác nhận lệnh nguy hiểm và cấp quyền sudo tương tác; xử lý lỗi fail-closed toàn diện; kiểm thử tích hợp end-to-end không cần mạng mô phỏng đầy đủ chu trình.
 
 - [ ] **Milestone 8: Triển khai Cứng hóa (Hardening), Script TOTP & Tài liệu**
   - Trạng thái: Chưa bắt đầu

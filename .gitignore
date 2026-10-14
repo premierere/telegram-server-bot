@@ -32,3 +32,11 @@ audit.jsonl
 # Local configuration overrides with real secrets
 config.local.yaml
 totp.secret
+
+# Compiled binaries and native objects
+bin/
+*.exe
+*.o
+*.obj
+*.so
+*.dylib

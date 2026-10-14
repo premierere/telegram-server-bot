@@ -17,7 +17,7 @@ from __future__ import annotations
 import json
 import os
 import sys
-from dataclasses import asdict, dataclass
+from dataclasses import asdict, dataclass, is_dataclass
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Callable, Coroutine
@@ -67,9 +67,17 @@ class AuditLogger:
         if self.audit_file_path:
             self.audit_file_path.parent.mkdir(parents=True, exist_ok=True)
 
-    def log(self, event: AuditEvent) -> None:
+    def log(self, event: AuditEvent | dict[str, Any]) -> None:
         """Append event to structured log and stdout."""
-        data = asdict(event)
+        if is_dataclass(event) and not isinstance(event, type):
+            data = asdict(event)
+        elif isinstance(event, dict):
+            data = dict(event)
+            if "timestamp" not in data:
+                data["timestamp"] = datetime.now(timezone.utc).isoformat()
+        else:
+            raise TypeError(f"Expected AuditEvent or dict, got {type(event)}")
+
         # Ensure no raw secrets leaked
         if data.get("command"):
             data["command"] = redact_secrets(data["command"])

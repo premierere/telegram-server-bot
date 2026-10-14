@@ -59,7 +59,7 @@ int main(int argc, char *argv[]) {
     // On Windows development host, execute via cmd /c
     char cmd_buffer[8192] = {0};
     if (strcmp(mode, "shell") == 0) {
-        snprintf(cmd_buffer, sizeof(cmd_buffer), "cmd.exe /c %s", argv[cmd_start_idx]);
+        snprintf(cmd_buffer, sizeof(cmd_buffer), "cmd.exe /s /c \"%s\"", argv[cmd_start_idx]);
     } else {
         // Restricted mode argv join
         for (int i = cmd_start_idx; i < argc; i++) {
@@ -69,16 +69,42 @@ int main(int argc, char *argv[]) {
         }
     }
 
+    SECURITY_ATTRIBUTES sa;
+    sa.nLength = sizeof(SECURITY_ATTRIBUTES);
+    sa.bInheritHandle = TRUE;
+    sa.lpSecurityDescriptor = NULL;
+
+    HANDLE hReadPipe, hWritePipe;
+    if (!CreatePipe(&hReadPipe, &hWritePipe, &sa, 0)) {
+        fprintf(stderr, "CreatePipe failed\n");
+        return 1;
+    }
+    SetHandleInformation(hReadPipe, HANDLE_FLAG_INHERIT, 0);
+
     STARTUPINFOA si;
     PROCESS_INFORMATION pi;
     ZeroMemory(&si, sizeof(si));
     si.cb = sizeof(si);
+    si.hStdOutput = hWritePipe;
+    si.hStdError = hWritePipe;
+    si.dwFlags |= STARTF_USESTDHANDLES;
     ZeroMemory(&pi, sizeof(pi));
 
-    if (!CreateProcessA(NULL, cmd_buffer, NULL, NULL, FALSE, 0, NULL, NULL, &si, &pi)) {
-        fprintf(stderr, "{\"type\":\"error\",\"message\":\"CreateProcess failed\"}\n");
+    if (!CreateProcessA(NULL, cmd_buffer, NULL, NULL, TRUE, 0, NULL, NULL, &si, &pi)) {
+        CloseHandle(hReadPipe);
+        CloseHandle(hWritePipe);
+        fprintf(stderr, "CreateProcess failed: %lu\n", GetLastError());
         return 1;
     }
+    CloseHandle(hWritePipe);
+
+    char buffer[BUFFER_SIZE];
+    DWORD bytes_read;
+    while (ReadFile(hReadPipe, buffer, sizeof(buffer), &bytes_read, NULL) && bytes_read > 0) {
+        fwrite(buffer, 1, bytes_read, stdout);
+        fflush(stdout);
+    }
+    CloseHandle(hReadPipe);
 
     WaitForSingleObject(pi.hProcess, INFINITE);
     DWORD exit_code = 0;
@@ -86,7 +112,6 @@ int main(int argc, char *argv[]) {
     CloseHandle(pi.hProcess);
     CloseHandle(pi.hThread);
 
-    printf("{\"type\":\"exit\",\"code\":%lu}\n", exit_code);
     return (int)exit_code;
 
 #else
