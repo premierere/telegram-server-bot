@@ -56,7 +56,7 @@ async def test_case_insensitive_username_fallback():
 
 
 def test_su_pty_execution_success(monkeypatch):
-    """Simulate PTY execution on POSIX systems."""
+    """Simulate PTY openpty execution on POSIX systems."""
     import sys
     from unittest.mock import MagicMock
 
@@ -69,6 +69,7 @@ def test_su_pty_execution_success(monkeypatch):
     monkeypatch.setattr("os.path.exists", lambda path: True)
 
     import subprocess
+
     monkeypatch.setattr(subprocess, "Popen", lambda *args, **kwargs: fake_proc)
 
     # Mock pty module if on Windows
@@ -81,9 +82,36 @@ def test_su_pty_execution_success(monkeypatch):
     monkeypatch.setattr("os.write", lambda fd, data: len(data))
 
     import select
+
     monkeypatch.setattr(select, "select", lambda r, w, x, t: ([10], [], []))
 
     verifier = LinuxPAMVerifier(mock_backend=False)
-    success, err = verifier._verify_via_su_pty("ubuntu", "SecretPass123")
+    success = verifier._verify_via_su_pty("ubuntu", "SecretPass123")
     assert success is True
-    assert err == ""
+
+
+def test_pty_fork_execution_simulation(monkeypatch):
+    """Simulate pty.fork parent execution with successful exit code."""
+    import sys
+    from unittest.mock import MagicMock
+
+    monkeypatch.setattr("shutil.which", lambda cmd: "/bin/su")
+    monkeypatch.setattr("os.path.exists", lambda path: True)
+
+    # Mock pty.fork
+    fake_pty = MagicMock()
+    fake_pty.fork.return_value = (12345, 99)
+    monkeypatch.setitem(sys.modules, "pty", fake_pty)
+
+    # Mock os functions
+    monkeypatch.setattr("os.close", lambda fd: None)
+    monkeypatch.setattr("os.waitpid", lambda pid, flags: (12345, 0))
+    monkeypatch.setattr("os.waitstatus_to_exitcode", lambda status: 0)
+
+    import select
+
+    monkeypatch.setattr(select, "select", lambda r, w, x, t: ([], [], []))
+
+    verifier = LinuxPAMVerifier(mock_backend=False)
+    success = verifier._verify_via_pty_fork("ubuntu", "SecretPass123")
+    assert success is True

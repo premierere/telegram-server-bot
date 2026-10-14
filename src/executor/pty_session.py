@@ -61,7 +61,15 @@ class PTYSessionManager:
 
         now = datetime.now()
         prompt_char = "#" if username == "root" else "$"
-        initial_prompt = f"{username}@server:~{prompt_char}"
+        hostname = "server"
+        try:
+            import socket
+
+            hostname = socket.gethostname() or "server"
+        except Exception:
+            pass
+
+        initial_prompt = f"{username}@{hostname}:~{prompt_char}"
 
         term = PTYTerminalSession(
             terminal_id=terminal_id,
@@ -174,9 +182,33 @@ class PTYSessionManager:
         output_bytes = result.combined_output
         output_str = output_bytes.decode(errors="replace") if isinstance(output_bytes, bytes) else str(output_bytes)
 
+        # Handle cd command for cwd tracking in session
+        tokens = actual_cmd.split()
+        if tokens and tokens[0] == "cd":
+            target_path = tokens[1] if len(tokens) > 1 else (f"/home/{term.username}" if term.username != "root" else "/root")
+            new_dir = (Path(term.cwd) / target_path).resolve()
+            if new_dir.exists() and new_dir.is_dir():
+                term.cwd = str(new_dir)
+
         # Update last prompt based on executed command or state
         prompt_char = "#" if term.username == "root" else "$"
-        term.last_prompt = f"{term.username}@server:~{prompt_char}"
+        hostname = "server"
+        try:
+            import socket
+
+            hostname = socket.gethostname() or "server"
+        except Exception:
+            pass
+
+        home_dir = "/root" if term.username == "root" else f"/home/{term.username}"
+        if term.cwd == home_dir:
+            cwd_str = "~"
+        elif term.cwd.startswith(home_dir + "/"):
+            cwd_str = "~" + term.cwd[len(home_dir) :]
+        else:
+            cwd_str = term.cwd
+
+        term.last_prompt = f"{term.username}@{hostname}:{cwd_str}{prompt_char}"
 
         prompt_banner = self.format_terminal_prompt(user_id, term.terminal_id)
         return output_str, prompt_banner

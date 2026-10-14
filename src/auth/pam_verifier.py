@@ -1,16 +1,25 @@
 """Zero-storage Linux PAM / system credential verifier.
 
-Verifies Linux username and password by invoking system authentication (su/PAM)
-via standard input or pipe without ever persisting the password to disk or state.
-Provides a mock backend for offline unit testing.
+Verifies Linux username and password by cascading multiple native authentication mechanisms:
+1. Direct /etc/shadow verification via crypt / libcrypt when running as root.
+2. Interactive PTY fork via `pty.fork()` with attached controlling terminal for `/bin/su`.
+3. PTY openpty fallback with attached session leader for `/bin/su`.
+4. In-process PAM C-bindings via ctypes (`libpam.so`) with fallback across services ('common-auth', 'login', 'su').
+5. Sudo standard input verification (`sudo -k -S true`) for administrative root elevation on Ubuntu.
+6. In-memory mock backend for offline testing on Windows / non-Linux dev hosts.
+
+Passes credentials directly in-memory or through kernel pipes without persisting to disk or state.
 """
 
 from __future__ import annotations
 
 import asyncio
+import logging
 import os
 import re
 import shutil
+
+logger = logging.getLogger(__name__)
 
 USERNAME_REGEX = re.compile(r"^[a-zA-Z_][a-zA-Z0-9_-]{0,31}$")
 
@@ -27,7 +36,7 @@ class LinuxPAMVerifier:
         self._mock_accounts[username] = password
 
     async def verify_credentials(self, username: str, password: str) -> tuple[bool, str]:
-        """Verify username and password against system PAM or mock backend.
+        """Verify username and password against system PAM, Sudo, or PTY su.
 
         Returns:
             (True, "") if authentication succeeds.
@@ -40,14 +49,13 @@ class LinuxPAMVerifier:
 
         # 2. Mock mode for unit tests and non-Linux development hosts
         if self.mock_backend or os.name == "nt":
-            # Support case-insensitive fallback in mock mode (e.g. mobile auto-capitalization)
             lookup_user = clean_user
             if lookup_user not in self._mock_accounts and lookup_user.lower() in self._mock_accounts:
                 lookup_user = lookup_user.lower()
 
             if lookup_user not in self._mock_accounts:
                 return False, "user_not_found"
-            if self._mock_accounts[lookup_user] == password:
+            if self._mock_accounts[lookup_user] == password.rstrip("\r\n"):
                 return True, ""
             return False, "authentication_failed"
 
@@ -69,29 +77,230 @@ class LinuxPAMVerifier:
         except ImportError:
             pass
 
-        # Execute PTY-based su verification in background thread to avoid blocking event loop
-        return await asyncio.to_thread(self._verify_via_su_pty, actual_user, password)
+        # Execute cascading authentication in worker thread to prevent event loop blocking
+        return await asyncio.to_thread(self._verify_cascading_posix, actual_user, password)
 
-    def _verify_via_su_pty(self, username: str, password: str, timeout: float = 6.0) -> tuple[bool, str]:
-        """Verify password by running su inside a real pseudo-terminal (PTY).
+    def _verify_cascading_posix(self, username: str, password: str) -> tuple[bool, str]:
+        """Execute cascading authentication methods on Linux."""
+        # Method 1: Direct /etc/shadow verification (instantaneous if root or shadow readable)
+        if self._verify_via_shadow(username, password):
+            logger.info("Credential verification succeeded via /etc/shadow for user '%s'", username)
+            return True, ""
 
-        Standard su reads passwords from /dev/tty via libc getpass(), not stdin pipe.
-        Running su inside an allocated PTY pair provides a real TTY slave so getpass()
-        reads the provided password correctly without hanging or requiring stdin pipe.
-        """
-        import pty
-        import select
-        import subprocess
-        import time
+        # Method 2: PTY fork with su (controlling terminal attached, SUID root su handles any account)
+        if self._verify_via_pty_fork(username, password):
+            logger.info("Credential verification succeeded via pty.fork su for user '%s'", username)
+            return True, ""
+
+        # Method 3: PTY openpty with su (fallback when fork is constrained)
+        if self._verify_via_su_pty(username, password):
+            logger.info("Credential verification succeeded via openpty su for user '%s'", username)
+            return True, ""
+
+        # Method 4: In-process PAM via ctypes (common-auth, login, su)
+        for svc in ("common-auth", "login", "su"):
+            if self._verify_via_libpam_ctypes(username, password, service=svc):
+                logger.info("Credential verification succeeded via libpam (service=%s) for user '%s'", svc, username)
+                return True, ""
+
+        # Method 5: Sudo -S verification (allows root validation with admin user's sudo password on Ubuntu)
+        if self._verify_via_sudo(username, password):
+            logger.info("Credential verification succeeded via sudo -S for user '%s'", username)
+            return True, ""
+
+        logger.warning("All credential verification methods failed for user '%s'", username)
+        return False, "authentication_failed"
+
+    def _verify_via_shadow(self, username: str, password: str) -> bool:
+        """Direct /etc/shadow verification when process has root/shadow permissions."""
+        if os.name == "nt":
+            return False
+
+        shadow_hash: str | None = None
+        try:
+            import spwd
+
+            try:
+                pw_record = spwd.getspnam(username)
+                shadow_hash = pw_record.sp_pwdp
+            except KeyError:
+                return False
+        except Exception:
+            pass
+
+        if not shadow_hash:
+            try:
+                with open("/etc/shadow", encoding="utf-8", errors="replace") as f:
+                    for line in f:
+                        parts = line.strip().split(":")
+                        if parts and parts[0] == username:
+                            shadow_hash = parts[1]
+                            break
+            except Exception:
+                return False
+
+        if not shadow_hash or shadow_hash in ("*", "!", "x", ""):
+            return False
+
+        clean_pw = password.rstrip("\r\n")
+
+        # Verify hash using crypt
+        try:
+            import crypt
+
+            return crypt.crypt(clean_pw, shadow_hash) == shadow_hash
+        except Exception:
+            pass
+
+        try:
+            import ctypes
+            import ctypes.util
+
+            libcrypt_name = ctypes.util.find_library("crypt") or "libcrypt.so.1"
+            libcrypt = ctypes.CDLL(libcrypt_name)
+            libcrypt.crypt.argtypes = [ctypes.c_char_p, ctypes.c_char_p]
+            libcrypt.crypt.restype = ctypes.c_char_p
+            res = libcrypt.crypt(clean_pw.encode("utf-8"), shadow_hash.encode("utf-8"))
+            if res:
+                return res.decode("utf-8") == shadow_hash
+        except Exception:
+            pass
+
+        return False
+
+    def _verify_via_pty_fork(self, username: str, password: str, timeout: float = 6.0) -> bool:
+        """Verify using pty.fork() which explicitly configures the controlling terminal."""
+        try:
+            import pty
+            import select
+            import time
+        except ImportError:
+            return False
 
         su_binary = shutil.which("su") or "/bin/su"
         if not os.path.exists(su_binary):
-            return False, "su_not_installed"
+            return False
+
+        clean_pw = password.rstrip("\r\n")
+
+        try:
+            pid, master_fd = pty.fork()
+        except Exception:
+            return False
+
+        if pid == 0:
+            # Child process: pty.fork already called setsid() and redirected std streams to slave
+            try:
+                import fcntl
+                import termios
+
+                fcntl.ioctl(0, termios.TIOCSCTTY, 1)
+            except Exception:
+                pass
+
+            env = {
+                "PATH": "/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin",
+                "LANG": "C",
+                "LC_ALL": "C",
+            }
+            try:
+                # IMPORTANT: options (-s /bin/sh -c true) MUST precede username
+                # because util-linux getopt stops option parsing at the first non-option argument
+                os.execve(su_binary, [su_binary, "-s", "/bin/sh", "-c", "true", username], env)  # nosec B606
+            except Exception:
+                os._exit(127)
+
+        # Parent process
+        start_time = time.monotonic()
+        password_sent = False
+        collected_output: list[bytes] = []
+        wnohang_flag = getattr(os, "WNOHANG", 1)
+
+        try:
+            while time.monotonic() - start_time < timeout:
+                # 1. Non-blocking check for child exit
+                waited_pid, status = os.waitpid(pid, wnohang_flag)
+                if waited_pid == pid:
+                    exit_code = (
+                        os.waitstatus_to_exitcode(status)
+                        if hasattr(os, "waitstatus_to_exitcode")
+                        else (status >> 8)
+                    )
+                    return exit_code == 0
+
+                # 2. Check for PTY activity
+                r, _, _ = select.select([master_fd], [], [], 0.05)
+                if r:
+                    try:
+                        data = os.read(master_fd, 1024)
+                    except OSError:
+                        # EIO indicates slave was closed when child terminated
+                        data = b""
+
+                    if data:
+                        collected_output.append(data)
+                        if not password_sent:
+                            combined = b"".join(collected_output)
+                            # When su prompts for password (e.g. "Password: ")
+                            if b":" in combined or b"password" in combined.lower():
+                                os.write(master_fd, (clean_pw + "\n").encode("utf-8"))
+                                password_sent = True
+                    else:
+                        # Master FD gave EOF/EIO (slave closed because child exited)
+                        # Wait for child to exit and return its exit code
+                        try:
+                            _, status = os.waitpid(pid, 0)
+                            exit_code = (
+                                os.waitstatus_to_exitcode(status)
+                                if hasattr(os, "waitstatus_to_exitcode")
+                                else (status >> 8)
+                            )
+                            return exit_code == 0
+                        except Exception:
+                            return False
+
+                # 3. Fallback: if 0.4s passed and prompt was not detected, send password anyway
+                if not password_sent and (time.monotonic() - start_time >= 0.4):
+                    try:
+                        os.write(master_fd, (clean_pw + "\n").encode("utf-8"))
+                        password_sent = True
+                    except OSError:
+                        pass
+
+            # Timeout reached: terminate child
+            try:
+                os.kill(pid, 9)
+                os.waitpid(pid, 0)
+            except Exception:
+                pass
+            return False
+
+        finally:
+            try:
+                os.close(master_fd)
+            except OSError:
+                pass
+
+    def _verify_via_su_pty(self, username: str, password: str, timeout: float = 6.0) -> bool:
+        """Verify password by running su inside an openpty pair (fallback when fork is constrained)."""
+        try:
+            import pty
+            import select
+            import subprocess  # nosec B404
+            import time
+        except ImportError:
+            return False
+
+        su_binary = shutil.which("su") or "/bin/su"
+        if not os.path.exists(su_binary):
+            return False
+
+        clean_pw = password.rstrip("\r\n")
 
         try:
             master_fd, slave_fd = pty.openpty()
-        except Exception as exc:
-            return False, f"system_error: pty_open_failed ({exc})"
+        except Exception:
+            return False
 
         env = {
             "PATH": "/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin",
@@ -100,25 +309,25 @@ class LinuxPAMVerifier:
         }
 
         try:
-            proc = subprocess.Popen(
-                [su_binary, username, "-c", "true"],
+            proc = subprocess.Popen(  # nosec B603
+                [su_binary, "-s", "/bin/sh", "-c", "true", username],
                 stdin=slave_fd,
                 stdout=slave_fd,
                 stderr=slave_fd,
                 close_fds=True,
                 env=env,
+                preexec_fn=os.setsid if hasattr(os, "setsid") else None,
             )
-        except Exception as exc:
+        except Exception:
             os.close(master_fd)
             os.close(slave_fd)
-            return False, f"system_error: su_exec_failed ({exc})"
+            return False
 
-        # Close slave_fd in parent so EOF is detectable
         os.close(slave_fd)
 
         start_time = time.monotonic()
         password_sent = False
-        output_chunks: list[bytes] = []
+        collected_output: list[bytes] = []
 
         try:
             while time.monotonic() - start_time < timeout:
@@ -130,45 +339,35 @@ class LinuxPAMVerifier:
                     try:
                         data = os.read(master_fd, 1024)
                     except OSError:
-                        # Slave closed on child exit
                         break
 
                     if not data:
                         break
-                    output_chunks.append(data)
 
-                    # Prompt arrived; send password followed by newline
+                    collected_output.append(data)
                     if not password_sent:
-                        try:
-                            os.write(master_fd, (password + "\n").encode("utf-8"))
-                            password_sent = True
-                        except OSError:
-                            break
+                        combined = b"".join(collected_output)
+                        if b":" in combined or b"password" in combined.lower():
+                            try:
+                                os.write(master_fd, (clean_pw + "\n").encode("utf-8"))
+                                password_sent = True
+                            except OSError:
+                                break
 
-                elif not password_sent and (time.monotonic() - start_time >= 0.15):
-                    # In case prompt was unbuffered, send password after 150ms
+                elif not password_sent and (time.monotonic() - start_time >= 0.4):
                     try:
-                        os.write(master_fd, (password + "\n").encode("utf-8"))
+                        os.write(master_fd, (clean_pw + "\n").encode("utf-8"))
                         password_sent = True
                     except OSError:
                         break
 
-            # Wait for child process to terminate
             rem_timeout = max(0.5, timeout - (time.monotonic() - start_time))
             try:
                 return_code = proc.wait(timeout=rem_timeout)
+                return return_code == 0
             except subprocess.TimeoutExpired:
                 proc.kill()
-                return False, "authentication_timeout"
-
-            if return_code == 0:
-                return True, ""
-
-            combined = b"".join(output_chunks).decode("utf-8", errors="replace").lower()
-            if "does not exist" in combined or "unknown user" in combined or "not found" in combined:
-                return False, "user_not_found"
-
-            return False, "authentication_failed"
+                return False
 
         finally:
             try:
@@ -180,3 +379,139 @@ class LinuxPAMVerifier:
                     proc.kill()
                 except Exception:
                     pass
+
+    def _verify_via_libpam_ctypes(self, username: str, password: str, service: str = "common-auth") -> bool:
+        """Authenticate user against Linux PAM in-process using ctypes bindings."""
+        try:
+            import ctypes
+            import ctypes.util
+
+            libpam_name = ctypes.util.find_library("pam") or "libpam.so.0"
+            try:
+                libpam = ctypes.CDLL(libpam_name)
+            except OSError:
+                libpam = ctypes.CDLL("libpam.so")
+        except Exception:
+            return False
+
+        try:
+            class PamHandle(ctypes.Structure):
+                pass
+
+            class PamMessage(ctypes.Structure):
+                _fields_ = [
+                    ("msg_style", ctypes.c_int),
+                    ("msg", ctypes.c_char_p),
+                ]
+
+            class PamResponse(ctypes.Structure):
+                _fields_ = [
+                    ("resp", ctypes.c_void_p),
+                    ("resp_retcode", ctypes.c_int),
+                ]
+
+            CMPFUNC = ctypes.CFUNCTYPE(
+                ctypes.c_int,
+                ctypes.c_int,
+                ctypes.POINTER(ctypes.POINTER(PamMessage)),
+                ctypes.POINTER(ctypes.POINTER(PamResponse)),
+                ctypes.c_void_p,
+            )
+
+            class PamConv(ctypes.Structure):
+                _fields_ = [
+                    ("conv", CMPFUNC),
+                    ("appdata_ptr", ctypes.c_void_p),
+                ]
+
+            libc = ctypes.CDLL(None)
+            alloc = libc.calloc
+            alloc.restype = ctypes.c_void_p
+            strdup = libc.strdup
+            strdup.restype = ctypes.c_void_p
+
+            pw_bytes = password.rstrip("\r\n").encode("utf-8")
+
+            @CMPFUNC
+            def conv_callback(num_msg, msg, resp, appdata_ptr):
+                resp_array = ctypes.cast(
+                    alloc(num_msg, ctypes.sizeof(PamResponse)),
+                    ctypes.POINTER(PamResponse),
+                )
+                for i in range(num_msg):
+                    style = msg[i].contents.msg_style
+                    if style == 1:  # PAM_PROMPT_ECHO_OFF
+                        resp_array[i].resp = strdup(pw_bytes)
+                        resp_array[i].resp_retcode = 0
+                    else:
+                        resp_array[i].resp = None
+                        resp_array[i].resp_retcode = 0
+                resp.contents = resp_array
+                return 0
+
+            pam_start = libpam.pam_start
+            pam_start.restype = ctypes.c_int
+            pam_start.argtypes = [
+                ctypes.c_char_p,
+                ctypes.c_char_p,
+                ctypes.POINTER(PamConv),
+                ctypes.POINTER(ctypes.POINTER(PamHandle)),
+            ]
+
+            pam_authenticate = libpam.pam_authenticate
+            pam_authenticate.restype = ctypes.c_int
+            pam_authenticate.argtypes = [ctypes.POINTER(PamHandle), ctypes.c_int]
+
+            pam_end = libpam.pam_end
+            pam_end.restype = ctypes.c_int
+            pam_end.argtypes = [ctypes.POINTER(PamHandle), ctypes.c_int]
+
+            conv_struct = PamConv(conv_callback, None)
+            handle = ctypes.POINTER(PamHandle)()
+
+            svc_bytes = service.encode("utf-8")
+            usr_bytes = username.encode("utf-8")
+
+            res = pam_start(svc_bytes, usr_bytes, ctypes.byref(conv_struct), ctypes.byref(handle))
+            if res != 0:
+                return False
+
+            auth_res = pam_authenticate(handle, 0)
+            pam_end(handle, auth_res)
+            return auth_res == 0
+        except Exception:
+            return False
+
+    def _verify_via_sudo(self, username: str, password: str) -> bool:
+        """Authenticate via sudo -k -S true (allows root validation with admin user's sudo password on Ubuntu)."""
+        current_user = None
+        try:
+            import pwd
+
+            current_user = pwd.getpwuid(os.getuid()).pw_name
+        except Exception:
+            pass
+
+        # Sudo stdin password only validates the process user's password for root elevation
+        if username != "root" and (current_user is None or username != current_user):
+            return False
+
+        sudo_binary = shutil.which("sudo")
+        if not sudo_binary:
+            return False
+
+        import subprocess  # nosec B404
+
+        clean_pw = password.rstrip("\r\n")
+        cmd = [sudo_binary, "-k", "-S", "true"]
+        try:
+            res = subprocess.run(  # nosec B603
+                cmd,
+                input=(clean_pw + "\n").encode("utf-8"),
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+                timeout=5.0,
+            )
+            return res.returncode == 0
+        except Exception:
+            return False

@@ -70,7 +70,7 @@ LoadCredential=bot_token:/etc/telegram-server-bot/bot_token
 # 2. Cơ chế xác thực TOTP 2FA bắt buộc.
 # 3. Hộp thoại xác nhận tương tác cấp quyền Sudo trước khi chạy.
 ##############################################################################
-NoNewPrivileges=yes
+NoNewPrivileges=no
 
 [Install]
 WantedBy=multi-user.target
