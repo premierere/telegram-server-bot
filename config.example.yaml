@@ -50,3 +50,12 @@ limits:
   confirmation_timeout_seconds: 30       # Dangerous command prompt expires in 30s
   max_inline_output_chars: 3500          # Split or send as document if exceeded
   max_document_output_bytes: 1048576     # 1 MB stream capture cap
+
+# 4. Sudo Elevation Policy
+# Policy options:
+#   - 'ask': Prompt admin on Telegram with inline confirmation buttons before running sudo
+#   - 'auto': Automatically execute with sudo without prompting
+#   - 'disabled': Forbid any sudo elevation
+sudo:
+  policy: "ask"
+  timeout_seconds: 30

@@ -25,13 +25,15 @@ Phương châm: *Security-First, Defense-in-Depth, Fail-Closed*
   - Kiểm thử: `tests/test_policy.py`, `tests/test_confirmation.py`
   - Ghi chú: Đã xây dựng Policy Engine chế độ restricted (kiểm tra chặt chẽ regex/enum, triệt tiêu command injection), nhận diện mẫu lệnh nguy hiểm (rm, dd, mkfs, shutdown, iptables, pipe shell, fork bombs), cơ chế xác nhận lệnh dangerous ràng buộc SHA-256 hash, user ID, chat ID, message ID, nonce một lần và thời hạn 30 giây.
 
-- [ ] **Milestone 5: Bộ thực thi Tiến trình (Process Executor) & Quản lý Tác vụ (Jobs)**
-  - Trạng thái: Chưa bắt đầu
-  - Kiểm thử: `tests/test_executor.py`, `tests/test_jobs_rate_limit.py`
+- [x] **Milestone 5: Bộ thực thi Tiến trình (Process Executor) & Quản lý Tác vụ (Jobs)**
+  - Trạng thái: Hoàn thành (13/13 tests passed)
+  - Kiểm thử: `tests/test_executor.py`, `tests/test_jobs_rate_limit.py`, `tests/test_terminals.py`
+  - Ghi chú: Đã xây dựng bộ thực thi tiến trình cô lập process group, clean env allowlist, stream cap 1MB, timeout SIGTERM->SIGKILL, JobManager giới hạn 2 jobs đồng thời, rate limit 10 lệnh/phút/user, Gateway đa terminal (1 đến 10 terminals) hỗ trợ lệnh prefix dấu chấm (.stop, .new, .t1..10, .terminals, .close), và Core thực thi C/C++ native (`server_executor.c`).
 
-- [ ] **Milestone 6: Xử lý Làm sạch Dữ liệu (Redaction) & Nhật ký Kiểm toán (Audit)**
-  - Trạng thái: Chưa bắt đầu
+- [x] **Milestone 6: Xử lý Làm sạch Dữ liệu (Redaction) & Nhật ký Kiểm toán (Audit)**
+  - Trạng thái: Hoàn thành (9/9 tests passed, tổng 63/63)
   - Kiểm thử: `tests/test_redaction.py`, `tests/test_audit.py`
+  - Ghi chú: Đã xây dựng bộ lọc ANSI escape, tự động che giấu Telegram Bot Token, Private Keys, mật khẩu key=value, Cloud Access Keys, TOTP codes; escape HTML; xuất nhật ký kiểm toán JSON Lines append-only và cảnh báo khẩn cấp tới quản trị viên qua Telegram.
 
 - [ ] **Milestone 7: Tích hợp Bot Handlers & Bản địa hóa Tiếng Việt**
   - Trạng thái: Chưa bắt đầu

@@ -32,6 +32,7 @@ ALLOWED_ROOT_KEYS = {
     "audit_file",
     "work_dir",
     "limits",
+    "sudo",
 }
 
 ALLOWED_LIMIT_KEYS = {
@@ -51,6 +52,15 @@ ALLOWED_LIMIT_KEYS = {
 
 ALLOWED_USER_KEYS = {"mode"}
 ALLOWED_MODES = {"restricted", "shell"}
+ALLOWED_SUDO_POLICIES = {"ask", "auto", "disabled"}
+
+
+@dataclass(frozen=True)
+class SudoConfig:
+    """Sudo elevation policy settings."""
+
+    policy: str = "ask"
+    timeout_seconds: int = 30
 
 
 @dataclass(frozen=True)
@@ -92,6 +102,7 @@ class Config:
     audit_file: str
     work_dir: str
     limits: LimitsConfig = field(default_factory=LimitsConfig)
+    sudo: SudoConfig = field(default_factory=SudoConfig)
 
 
 def check_root_user() -> None:
@@ -279,6 +290,23 @@ def load_config(
             f"cannot exceed command_max_timeout_seconds ({limits.command_max_timeout_seconds})."
         )
 
+    # Validate sudo config
+    raw_sudo = data.get("sudo", {})
+    if not isinstance(raw_sudo, dict):
+        raise ConfigurationError("sudo must be a mapping of sudo settings.")
+
+    sudo_policy = raw_sudo.get("policy", "ask")
+    if sudo_policy not in ALLOWED_SUDO_POLICIES:
+        raise ConfigurationError(
+            f"Invalid sudo policy '{sudo_policy}'. Must be one of {sorted(ALLOWED_SUDO_POLICIES)}."
+        )
+
+    sudo_timeout = raw_sudo.get("timeout_seconds", 30)
+    if not isinstance(sudo_timeout, int) or sudo_timeout <= 0:
+        raise ConfigurationError("sudo timeout_seconds must be a positive integer.")
+
+    sudo_config = SudoConfig(policy=sudo_policy, timeout_seconds=sudo_timeout)
+
     # Validate paths
     bot_token_file = data.get("bot_token_file")
     if bot_token_file is not None and not isinstance(bot_token_file, str):
@@ -320,4 +348,5 @@ def load_config(
         audit_file=audit_file,
         work_dir=work_dir,
         limits=limits,
+        sudo=sudo_config,
     )
