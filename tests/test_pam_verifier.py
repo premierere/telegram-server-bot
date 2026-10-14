@@ -37,3 +37,53 @@ async def test_username_validation():
     success, err = await verifier.verify_credentials("-bad_start", "pass")
     assert success is False
     assert "invalid_username" in err.lower()
+
+
+@pytest.mark.asyncio
+async def test_case_insensitive_username_fallback():
+    verifier = LinuxPAMVerifier(mock_backend=True)
+    verifier.set_mock_account("ubuntu", "UbuntuPass123!")
+
+    # Mobile auto-capitalized "Ubuntu" should match "ubuntu"
+    success, err = await verifier.verify_credentials("Ubuntu", "UbuntuPass123!")
+    assert success is True
+    assert err == ""
+
+    # Wrong password with capitalized username should still report authentication_failed
+    success, err = await verifier.verify_credentials("Ubuntu", "WrongPass")
+    assert success is False
+    assert err == "authentication_failed"
+
+
+def test_su_pty_execution_success(monkeypatch):
+    """Simulate PTY execution on POSIX systems."""
+    import sys
+    from unittest.mock import MagicMock
+
+    # Mock pty, os.read, os.write, select, subprocess
+    fake_proc = MagicMock()
+    fake_proc.poll.side_effect = [None, 0, 0, 0, 0]
+    fake_proc.wait.return_value = 0
+
+    monkeypatch.setattr("shutil.which", lambda cmd: "/bin/su")
+    monkeypatch.setattr("os.path.exists", lambda path: True)
+
+    import subprocess
+    monkeypatch.setattr(subprocess, "Popen", lambda *args, **kwargs: fake_proc)
+
+    # Mock pty module if on Windows
+    fake_pty = MagicMock()
+    fake_pty.openpty.return_value = (10, 11)
+    monkeypatch.setitem(sys.modules, "pty", fake_pty)
+
+    monkeypatch.setattr("os.close", lambda fd: None)
+    monkeypatch.setattr("os.read", lambda fd, n: b"Password: ")
+    monkeypatch.setattr("os.write", lambda fd, data: len(data))
+
+    import select
+    monkeypatch.setattr(select, "select", lambda r, w, x, t: ([10], [], []))
+
+    verifier = LinuxPAMVerifier(mock_backend=False)
+    success, err = verifier._verify_via_su_pty("ubuntu", "SecretPass123")
+    assert success is True
+    assert err == ""

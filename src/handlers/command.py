@@ -74,9 +74,32 @@ async def direct_text_dispatcher(update: Update, context: ContextTypes.DEFAULT_T
             )
             return
 
-        password = raw_text
-        is_valid, _ = await app.pam_verifier.verify_credentials(username, password)
+        password = message.text or ""
+        is_valid, reason = await app.pam_verifier.verify_credentials(username, password)
         if not is_valid:
+            if reason in ("user_not_found", "invalid_username"):
+                app.auth_state_manager.set_stage(user.id, AuthStage.AWAITING_USERNAME)
+                await chat.send_message(
+                    f"❌ <b>Tài khoản Linux <code>{username}</code> không tồn tại trên hệ thống.</b>\n"
+                    "Vui lòng nhập lại tên tài khoản Linux chính xác (ví dụ: <code>ubuntu</code>):",
+                    parse_mode=ParseMode.HTML,
+                )
+                return
+
+            if reason == "authentication_timeout":
+                await chat.send_message(
+                    "⏱️ <b>Hết thời gian chờ xác thực hệ thống (Timeout).</b> Vui lòng thử lại mật khẩu:",
+                    parse_mode=ParseMode.HTML,
+                )
+                return
+
+            if reason.startswith("system_error:"):
+                await chat.send_message(
+                    f"⚠️ <b>Lỗi hệ thống khi xác thực:</b> <code>{reason}</code>\nVui lòng thử lại mật khẩu:",
+                    parse_mode=ParseMode.HTML,
+                )
+                return
+
             next_stage, failures = app.auth_state_manager.record_password_failure(user.id)
             if next_stage == AuthStage.AWAITING_USERNAME:
                 await chat.send_message(
@@ -84,8 +107,11 @@ async def direct_text_dispatcher(update: Update, context: ContextTypes.DEFAULT_T
                     parse_mode=ParseMode.HTML,
                 )
             else:
+                hint = ""
+                if username.lower() == "root":
+                    hint = "\n💡 <i>Gợi ý: Trên Ubuntu, tài khoản root mặc định bị khóa mật khẩu. Bạn nên đăng nhập bằng tài khoản người dùng có quyền sudo (ví dụ: ubuntu) hoặc đặt mật khẩu root qua lệnh 'sudo passwd root'.</i>"
                 await chat.send_message(
-                    f"❌ <b>Mật khẩu không chính xác ({failures}/5).</b> Vui lòng thử lại:",
+                    f"❌ <b>Mật khẩu không chính xác ({failures}/5).</b> Vui lòng thử lại:{hint}",
                     parse_mode=ParseMode.HTML,
                 )
             return
@@ -118,14 +144,25 @@ async def direct_text_dispatcher(update: Update, context: ContextTypes.DEFAULT_T
             await chat.send_message("❌ Lỗi: Không xác định được tài khoản cho terminal mới.", parse_mode=ParseMode.HTML)
             return
 
-        password = raw_text
-        is_valid, _ = await app.pam_verifier.verify_credentials(target_user, password)
+        password = message.text or ""
+        is_valid, reason = await app.pam_verifier.verify_credentials(target_user, password)
         if not is_valid:
             app.auth_state_manager.set_stage(user.id, AuthStage.AUTHENTICATED)
-            await chat.send_message(
-                f"❌ <b>Mật khẩu cho tài khoản <code>{target_user}</code> không chính xác.</b> Hủy thao tác mở terminal mới.",
-                parse_mode=ParseMode.HTML,
-            )
+            if reason in ("user_not_found", "invalid_username"):
+                await chat.send_message(
+                    f"❌ <b>Tài khoản Linux <code>{target_user}</code> không tồn tại trên hệ thống.</b> Hủy thao tác mở terminal mới.",
+                    parse_mode=ParseMode.HTML,
+                )
+            elif reason == "authentication_timeout":
+                await chat.send_message(
+                    "⏱️ <b>Hết thời gian chờ xác thực hệ thống (Timeout).</b> Hủy thao tác mở terminal mới.",
+                    parse_mode=ParseMode.HTML,
+                )
+            else:
+                await chat.send_message(
+                    f"❌ <b>Mật khẩu cho tài khoản <code>{target_user}</code> không chính xác.</b> Hủy thao tác mở terminal mới.",
+                    parse_mode=ParseMode.HTML,
+                )
             return
 
         try:

@@ -10,8 +10,9 @@ from __future__ import annotations
 import asyncio
 import os
 import re
+import shutil
 
-USERNAME_REGEX = re.compile(r"^[a-z_][a-z0-9_-]{0,31}$")
+USERNAME_REGEX = re.compile(r"^[a-zA-Z_][a-zA-Z0-9_-]{0,31}$")
 
 
 class LinuxPAMVerifier:
@@ -32,52 +33,150 @@ class LinuxPAMVerifier:
             (True, "") if authentication succeeds.
             (False, error_reason) if authentication fails.
         """
-        # 1. Strict username validation to prevent injection into su/PAM commands
+        # 1. Strict username validation to prevent injection
         clean_user = username.strip()
         if not USERNAME_REGEX.match(clean_user):
             return False, "invalid_username"
 
         # 2. Mock mode for unit tests and non-Linux development hosts
         if self.mock_backend or os.name == "nt":
-            if clean_user not in self._mock_accounts:
+            # Support case-insensitive fallback in mock mode (e.g. mobile auto-capitalization)
+            lookup_user = clean_user
+            if lookup_user not in self._mock_accounts and lookup_user.lower() in self._mock_accounts:
+                lookup_user = lookup_user.lower()
+
+            if lookup_user not in self._mock_accounts:
                 return False, "user_not_found"
-            if self._mock_accounts[clean_user] == password:
+            if self._mock_accounts[lookup_user] == password:
                 return True, ""
             return False, "authentication_failed"
 
-        # 3. Linux POSIX PAM Verification via su -c true
-        # Invokes su <username> -c true, passing password via stdin
+        # 3. Linux POSIX verification
+        # First verify account existence via pwd module (with lowercase fallback)
+        actual_user = clean_user
         try:
-            process = await asyncio.create_subprocess_exec(
-                "su",
-                clean_user,
-                "-c",
-                "true",
-                stdin=asyncio.subprocess.PIPE,
-                stdout=asyncio.subprocess.PIPE,
-                stderr=asyncio.subprocess.PIPE,
-            )
+            import pwd
 
-            # Write password to stdin and close
-            input_bytes = (password + "\n").encode("utf-8")
-            stdout, stderr = await asyncio.wait_for(
-                process.communicate(input=input_bytes),
-                timeout=5.0,
-            )
+            try:
+                pw_record = pwd.getpwnam(clean_user)
+                actual_user = pw_record.pw_name
+            except KeyError:
+                try:
+                    pw_record = pwd.getpwnam(clean_user.lower())
+                    actual_user = pw_record.pw_name
+                except KeyError:
+                    return False, "user_not_found"
+        except ImportError:
+            pass
 
-            if process.returncode == 0:
+        # Execute PTY-based su verification in background thread to avoid blocking event loop
+        return await asyncio.to_thread(self._verify_via_su_pty, actual_user, password)
+
+    def _verify_via_su_pty(self, username: str, password: str, timeout: float = 6.0) -> tuple[bool, str]:
+        """Verify password by running su inside a real pseudo-terminal (PTY).
+
+        Standard su reads passwords from /dev/tty via libc getpass(), not stdin pipe.
+        Running su inside an allocated PTY pair provides a real TTY slave so getpass()
+        reads the provided password correctly without hanging or requiring stdin pipe.
+        """
+        import pty
+        import select
+        import subprocess
+        import time
+
+        su_binary = shutil.which("su") or "/bin/su"
+        if not os.path.exists(su_binary):
+            return False, "su_not_installed"
+
+        try:
+            master_fd, slave_fd = pty.openpty()
+        except Exception as exc:
+            return False, f"system_error: pty_open_failed ({exc})"
+
+        env = {
+            "PATH": "/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin",
+            "LANG": "C",
+            "LC_ALL": "C",
+        }
+
+        try:
+            proc = subprocess.Popen(
+                [su_binary, username, "-c", "true"],
+                stdin=slave_fd,
+                stdout=slave_fd,
+                stderr=slave_fd,
+                close_fds=True,
+                env=env,
+            )
+        except Exception as exc:
+            os.close(master_fd)
+            os.close(slave_fd)
+            return False, f"system_error: su_exec_failed ({exc})"
+
+        # Close slave_fd in parent so EOF is detectable
+        os.close(slave_fd)
+
+        start_time = time.monotonic()
+        password_sent = False
+        output_chunks: list[bytes] = []
+
+        try:
+            while time.monotonic() - start_time < timeout:
+                if proc.poll() is not None:
+                    break
+
+                r, _, _ = select.select([master_fd], [], [], 0.05)
+                if r:
+                    try:
+                        data = os.read(master_fd, 1024)
+                    except OSError:
+                        # Slave closed on child exit
+                        break
+
+                    if not data:
+                        break
+                    output_chunks.append(data)
+
+                    # Prompt arrived; send password followed by newline
+                    if not password_sent:
+                        try:
+                            os.write(master_fd, (password + "\n").encode("utf-8"))
+                            password_sent = True
+                        except OSError:
+                            break
+
+                elif not password_sent and (time.monotonic() - start_time >= 0.15):
+                    # In case prompt was unbuffered, send password after 150ms
+                    try:
+                        os.write(master_fd, (password + "\n").encode("utf-8"))
+                        password_sent = True
+                    except OSError:
+                        break
+
+            # Wait for child process to terminate
+            rem_timeout = max(0.5, timeout - (time.monotonic() - start_time))
+            try:
+                return_code = proc.wait(timeout=rem_timeout)
+            except subprocess.TimeoutExpired:
+                proc.kill()
+                return False, "authentication_timeout"
+
+            if return_code == 0:
                 return True, ""
 
-            err_msg = stderr.decode(errors="replace")
-            if "unknown user" in err_msg.lower() or "user not found" in err_msg.lower():
+            combined = b"".join(output_chunks).decode("utf-8", errors="replace").lower()
+            if "does not exist" in combined or "unknown user" in combined or "not found" in combined:
                 return False, "user_not_found"
+
             return False, "authentication_failed"
 
-        except asyncio.TimeoutError:
+        finally:
             try:
-                process.kill()
-            except Exception:
+                os.close(master_fd)
+            except OSError:
                 pass
-            return False, "authentication_timeout"
-        except Exception as exc:
-            return False, f"system_error: {exc}"
+            if proc.poll() is None:
+                try:
+                    proc.kill()
+                except Exception:
+                    pass
