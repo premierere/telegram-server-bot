@@ -11,11 +11,188 @@ from telegram.ext import ContextTypes
 
 from src import messages
 from src.audit import AuditEvent
+from src.auth.state import AuthStage
 from src.executor.terminals import TerminalState, paginate_output
 from src.redaction import sanitize_output
 
 if TYPE_CHECKING:
     from src.bot import BotApplication
+
+
+async def direct_text_dispatcher(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Handle all direct non-slash text messages based on active authentication and terminal stage.
+
+    Stages:
+    1. UNAUTHENTICATED: prompt user to /login <TOTP>.
+    2. AWAITING_USERNAME: capture username, advance to AWAITING_PASSWORD.
+    3. AWAITING_PASSWORD: delete password message, verify credentials. Loop up to 5 times.
+    4. AWAITING_NEW_TERMINAL_PASSWORD: verify password for /new <username> and spawn terminal.
+    5. AUTHENTICATED: direct command execution in active terminal shell without /run prefix.
+    """
+    app: BotApplication = context.application.bot_data["app_state"]
+    message = update.effective_message
+    user = update.effective_user
+    chat = update.effective_chat
+
+    if not message or not user or not chat or not message.text:
+        return
+
+    raw_text = message.text.strip()
+    if raw_text.startswith("/"):
+        return
+
+    stage = app.auth_state_manager.get_stage(user.id)
+
+    # 1. Unauthenticated: reject direct text
+    if stage == AuthStage.UNAUTHENTICATED:
+        await chat.send_message(messages.MSG_NOT_LOGGED_IN, parse_mode=ParseMode.HTML)
+        return
+
+    # 2. Awaiting Username: capture username and prompt for password
+    if stage == AuthStage.AWAITING_USERNAME:
+        username = raw_text
+        app.auth_state_manager.set_stage(user.id, AuthStage.AWAITING_PASSWORD, pending_username=username)
+        await chat.send_message(
+            f"🔑 Vui lòng nhập mật khẩu cho tài khoản <code>{username}</code> (tin nhắn mật khẩu sẽ được tự động xóa ngay lập tức):",
+            parse_mode=ParseMode.HTML,
+        )
+        return
+
+    # 3. Awaiting Password: delete immediately and verify credentials
+    if stage == AuthStage.AWAITING_PASSWORD:
+        try:
+            await message.delete()
+        except Exception:
+            pass
+
+        username = app.auth_state_manager.get_pending_username(user.id)
+        if not username:
+            app.auth_state_manager.set_stage(user.id, AuthStage.AWAITING_USERNAME)
+            await chat.send_message(
+                "❌ Không tìm thấy tên tài khoản. Vui lòng nhập lại tên tài khoản Linux:",
+                parse_mode=ParseMode.HTML,
+            )
+            return
+
+        password = raw_text
+        is_valid, _ = await app.pam_verifier.verify_credentials(username, password)
+        if not is_valid:
+            next_stage, failures = app.auth_state_manager.record_password_failure(user.id)
+            if next_stage == AuthStage.AWAITING_USERNAME:
+                await chat.send_message(
+                    "❌ <b>Bạn đã nhập sai mật khẩu quá 5 lần.</b> Vui lòng nhập lại tên tài khoản Linux:",
+                    parse_mode=ParseMode.HTML,
+                )
+            else:
+                await chat.send_message(
+                    f"❌ <b>Mật khẩu không chính xác ({failures}/5).</b> Vui lòng thử lại:",
+                    parse_mode=ParseMode.HTML,
+                )
+            return
+
+        # Password verified! Complete login and open Terminal 1
+        app.auth_state_manager.complete_authentication(user.id, username)
+        app.session_manager.create_session(user.id)
+
+        term = app.pty_session_manager.get_active_terminal(user.id)
+        if not term:
+            term = await app.pty_session_manager.create_terminal(user.id, username)
+
+        banner = app.pty_session_manager.format_terminal_prompt(user.id, term.terminal_id)
+        await chat.send_message(
+            f"✅ <b>Đăng nhập thành công!</b> Đã mở Terminal #{term.terminal_id} (<code>{username}</code>).\n\n<pre><code class='language-text'>{banner}</code></pre>",
+            parse_mode=ParseMode.HTML,
+        )
+        return
+
+    # 4. Awaiting New Terminal Password for /new <username>
+    if stage == AuthStage.AWAITING_NEW_TERMINAL_PASSWORD:
+        try:
+            await message.delete()
+        except Exception:
+            pass
+
+        target_user = app.auth_state_manager.get_target_new_terminal_username(user.id)
+        if not target_user:
+            app.auth_state_manager.set_stage(user.id, AuthStage.AUTHENTICATED)
+            await chat.send_message("❌ Lỗi: Không xác định được tài khoản cho terminal mới.", parse_mode=ParseMode.HTML)
+            return
+
+        password = raw_text
+        is_valid, _ = await app.pam_verifier.verify_credentials(target_user, password)
+        if not is_valid:
+            app.auth_state_manager.set_stage(user.id, AuthStage.AUTHENTICATED)
+            await chat.send_message(
+                f"❌ <b>Mật khẩu cho tài khoản <code>{target_user}</code> không chính xác.</b> Hủy thao tác mở terminal mới.",
+                parse_mode=ParseMode.HTML,
+            )
+            return
+
+        try:
+            term = await app.pty_session_manager.create_terminal(user.id, target_user)
+            app.auth_state_manager.set_stage(user.id, AuthStage.AUTHENTICATED)
+            banner = app.pty_session_manager.format_terminal_prompt(user.id, term.terminal_id)
+            await chat.send_message(
+                f"✅ <b>Đã mở Terminal #{term.terminal_id} thành công!</b>\n\n<pre><code class='language-text'>{banner}</code></pre>",
+                parse_mode=ParseMode.HTML,
+            )
+        except ValueError as exc:
+            app.auth_state_manager.set_stage(user.id, AuthStage.AUTHENTICATED)
+            await chat.send_message(f"❌ {exc}", parse_mode=ParseMode.HTML)
+        return
+
+    # 5. Authenticated: direct command execution in active terminal without /run
+    session = app.session_manager.get_session(user.id)
+    if not session:
+        app.auth_state_manager.set_stage(user.id, AuthStage.UNAUTHENTICATED)
+        await chat.send_message(messages.MSG_NOT_LOGGED_IN, parse_mode=ParseMode.HTML)
+        return
+    session.touch()
+
+    # Rate limiting check
+    is_allowed, wait_seconds = app.job_manager.check_rate_limit(user.id)
+    if not is_allowed:
+        await chat.send_message(
+            messages.MSG_RATE_LIMIT_EXCEEDED.format(wait_seconds=wait_seconds),
+            parse_mode=ParseMode.HTML,
+        )
+        return
+    app.job_manager.record_command_attempt(user.id)
+
+    user_config = app.config.users.get(user.id)
+    user_mode = user_config.mode if user_config else "restricted"
+
+    # Dangerous command confirmation for shell mode
+    if user_mode != "restricted" and app.policy_engine.is_dangerous_shell_command(raw_text):
+        await _prompt_dangerous_confirmation(app, chat, user, message, shell_command=raw_text)
+        return
+
+    # Execute in active PTY terminal session
+    job = app.job_manager.register_job(user_id=user.id, command_display=raw_text)
+    try:
+        output_str, prompt_banner = await app.pty_session_manager.execute_in_active_terminal(
+            user_id=user.id,
+            command=raw_text,
+            timeout_seconds=app.config.limits.command_default_timeout_seconds,
+        )
+        output_text = output_str.strip()
+        combined_text = f"{output_text}\n\n{prompt_banner}" if output_text else prompt_banner
+        chunks = paginate_output(combined_text)
+        for chunk in chunks:
+            await chat.send_message(chunk, parse_mode=ParseMode.HTML)
+
+        event = AuditEvent(
+            user_id=user.id,
+            chat_id=chat.id,
+            message_id=message.message_id,
+            event_type="command_executed",
+            command=raw_text,
+            decision="allowed",
+            reason="interactive_shell",
+        )
+        app.audit_logger.log(event)
+    finally:
+        app.job_manager.unregister_job(job.job_id)
 
 
 async def run_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:

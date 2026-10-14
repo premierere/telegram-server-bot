@@ -37,7 +37,7 @@ from src.executor.native_bridge import NativeExecutionBridge
 from src.executor.pty_session import PTYSessionManager
 from src.executor.terminals import TerminalGateway
 from src.handlers.auth import exit_handler, login_handler, logout_handler
-from src.handlers.command import confirmation_callback_handler, run_handler
+from src.handlers.command import confirmation_callback_handler, direct_text_dispatcher, run_handler
 from src.handlers.error import error_handler
 from src.handlers.system import (
     close_handler,
@@ -170,6 +170,9 @@ class BotApplication:
 
         # Confirmation callback queries
         app.add_handler(CallbackQueryHandler(confirmation_callback_handler))
+
+        # Direct interactive text & command execution (without /run prefix)
+        app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, direct_text_dispatcher))
 
         # Error handler
         app.add_error_handler(error_handler)
