@@ -1,0 +1,52 @@
+# Telegram Server Administration Bot - Configuration Template
+# Strictly validated at startup: Unknown keys or incorrect types cause startup failure.
+
+# 1. Identity & Authorization
+# Only numeric Telegram user IDs are authorized. Usernames are never used.
+# Empty or missing list will refuse to start.
+allowed_user_ids:
+  - 123456789
+
+# Telegram user IDs that receive high-priority security alerts (logins, lockouts, confirmations)
+admin_user_ids:
+  - 123456789
+
+# Per-user execution mode: 'restricted' (default) or 'shell' (must be explicitly enabled)
+users:
+  123456789:
+    mode: restricted
+
+# 2. File Paths
+# Bot token resolution order:
+#   1. $CREDENTIALS_DIRECTORY/bot_token (Systemd Credential)
+#   2. bot_token_file (below)
+#   3. TELEGRAM_BOT_TOKEN environment variable
+bot_token_file: "/etc/telegram-server-bot/token"
+
+# Directory where TOTP secrets are stored per user: <totp_dir>/<user_id>.secret
+# Must have permissions 0600 and be owned by the service user.
+totp_dir: "/var/lib/telegram-server-bot/totp"
+
+# Path to the policy YAML file for restricted mode commands
+policy_file: "policy.yaml"
+
+# Path to the structured JSON Lines audit log
+audit_file: "/var/log/telegram-server-bot/audit.jsonl"
+
+# Fixed working directory for executing commands
+work_dir: "/var/lib/telegram-server-bot/sandbox"
+
+# 3. Security Limits
+limits:
+  session_idle_timeout_seconds: 600      # 10 minutes
+  session_absolute_timeout_seconds: 3600  # 1 hour
+  command_default_timeout_seconds: 30    # 30 seconds
+  command_max_timeout_seconds: 300       # 300 seconds max allowed
+  max_concurrent_jobs: 2                 # Global concurrency limit
+  rate_limit_commands_per_minute: 10     # Max 10 commands/min per user
+  message_max_age_seconds: 60            # Ignore messages older than 60s
+  totp_max_clock_drift_steps: 1          # Max 1 step (30s) drift RFC 6238
+  totp_lockout_threshold: 5              # Lock after 5 consecutive failures
+  confirmation_timeout_seconds: 30       # Dangerous command prompt expires in 30s
+  max_inline_output_chars: 3500          # Split or send as document if exceeded
+  max_document_output_bytes: 1048576     # 1 MB stream capture cap

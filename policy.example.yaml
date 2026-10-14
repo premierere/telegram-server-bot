@@ -1,0 +1,42 @@
+# Policy definition for restricted execution mode
+# In restricted mode, commands cannot invoke shells or use pipes, redirects, substitutions or globs.
+# Every command maps to an exact argv list and every parameter is validated via enum or regex.
+
+commands:
+  - name: uptime
+    description: "Display system uptime and load average"
+    argv: ["uptime"]
+    params: {}
+
+  - name: memory_info
+    description: "Display memory usage statistics"
+    argv: ["free", "-m"]
+    params: {}
+
+  - name: disk_usage
+    description: "Display disk space usage"
+    argv: ["df", "-h", "/"]
+    params: {}
+
+  - name: service_status
+    description: "Check systemd service status"
+    argv: ["systemctl", "status", "{unit}", "--no-pager"]
+    params:
+      unit:
+        enum:
+          - "nginx.service"
+          - "postgresql.service"
+          - "ssh.service"
+          - "telegram-server-bot.service"
+
+  - name: tail_log
+    description: "Read recent lines from authorized system log"
+    argv: ["tail", "-n", "{lines}", "{path}"]
+    params:
+      lines:
+        regex: "^[0-9]{1,3}$"
+      path:
+        enum:
+          - "/var/log/nginx/access.log"
+          - "/var/log/nginx/error.log"
+          - "/var/log/syslog"

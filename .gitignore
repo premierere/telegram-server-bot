@@ -1,0 +1,34 @@
+# Byte-compiled / optimized / DLL files
+__pycache__/
+*.py[cod]
+*$py.class
+
+# Environments
+.venv/
+venv/
+env/
+ENV/
+
+# Testing and linting
+.pytest_cache/
+.ruff_cache/
+.coverage
+htmlcov/
+
+# Secrets and state files (strictly ignored)
+.env
+*.env
+*.token
+*.secret
+*.key
+*.pem
+credentials/
+state/
+*.log
+audit.jsonl
+/var/log/
+/var/lib/
+
+# Local configuration overrides with real secrets
+config.local.yaml
+totp.secret

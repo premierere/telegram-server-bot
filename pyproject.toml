@@ -1,0 +1,41 @@
+[build-system]
+requires = ["setuptools>=68.0", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "telegram-server-bot"
+version = "0.1.0"
+description = "A security-first Telegram bot for Linux server administration under hostile conditions"
+readme = "README.md"
+requires-python = ">=3.11"
+authors = [
+    { name = "Security Administrator" }
+]
+dependencies = [
+    "python-telegram-bot>=21.0,<22.0",
+    "pyotp>=2.9.0,<3.0.0",
+    "PyYAML>=6.0.1,<7.0.0",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=8.0.0",
+    "pytest-asyncio>=0.23.0",
+    "ruff>=0.5.0",
+    "bandit>=1.7.9",
+]
+
+[tool.pytest.ini_options]
+minversion = "8.0"
+testpaths = ["tests"]
+pythonpath = ["."]
+asyncio_mode = "auto"
+python_files = ["test_*.py"]
+
+[tool.ruff]
+line-length = 100
+target-version = "py311"
+
+[tool.bandit]
+exclude_dirs = ["tests", ".venv"]
+skips = ["B404", "B603", "B607"] # Subprocess execution is core functionality and rigorously controlled
