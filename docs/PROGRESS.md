@@ -15,9 +15,10 @@ Phương châm: *Security-First, Defense-in-Depth, Fail-Closed*
   - Kiểm thử: `tests/test_identity.py`
   - Ghi chú: Đã xây dựng bộ lọc private chat, chat_id == user_id, drop silent cho user lạ kèm rate-limited audit, chặn stale message > 60s, hủy forwarded/edited/channel/inline updates.
 
-- [ ] **Milestone 3: Xác thực 2 bước TOTP, Khóa tài khoản & Quản lý Session**
-  - Trạng thái: Chưa bắt đầu
+- [x] **Milestone 3: Xác thực 2 bước TOTP, Khóa tài khoản & Quản lý Session**
+  - Trạng thái: Hoàn thành (9/9 tests passed, tổng 29/29)
   - Kiểm thử: `tests/test_auth_totp.py`, `tests/test_session.py`
+  - Ghi chú: Đã xây dựng xác thực TOTP RFC 6238, độ lệch tối đa 1 bước (30s), chặn replay mã OTP, khóa tài khoản sau 5 lần sai với exponential backoff, session thuần bộ nhớ RAM với idle timeout (10 phút) và absolute timeout (1 giờ).
 
 - [ ] **Milestone 4: Công cụ Chính sách (Policy Engine) & Xác nhận Lệnh Nguy hiểm**
   - Trạng thái: Chưa bắt đầu
