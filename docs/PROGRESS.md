@@ -10,9 +10,10 @@ Phương châm: *Security-First, Defense-in-Depth, Fail-Closed*
   - Kiểm thử: `tests/test_config.py`
   - Ghi chú: Đã xây dựng schema validation nghiêm ngặt, từ chối chạy dưới quyền root, nạp token ưu tiên systemd-creds -> file -> env, kiểm tra quyền file 0600/0400 trên POSIX.
 
-- [ ] **Milestone 2: Bộ lọc Định danh & Chống tấn công Replay**
-  - Trạng thái: Chưa bắt đầu
+- [x] **Milestone 2: Bộ lọc Định danh & Chống tấn công Replay**
+  - Trạng thái: Hoàn thành (9/9 tests passed, tổng 20/20)
   - Kiểm thử: `tests/test_identity.py`
+  - Ghi chú: Đã xây dựng bộ lọc private chat, chat_id == user_id, drop silent cho user lạ kèm rate-limited audit, chặn stale message > 60s, hủy forwarded/edited/channel/inline updates.
 
 - [ ] **Milestone 3: Xác thực 2 bước TOTP, Khóa tài khoản & Quản lý Session**
   - Trạng thái: Chưa bắt đầu
