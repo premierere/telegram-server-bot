@@ -10,6 +10,7 @@ from telegram.ext import ContextTypes
 
 from src import messages
 from src.audit import AuditEvent
+from src.auth.state import AuthStage
 
 if TYPE_CHECKING:
     from src.bot import BotApplication
@@ -42,22 +43,25 @@ async def login_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
     is_valid, reason = app.totp_manager.verify_code(user_id=user.id, code=code)
 
     if is_valid:
-        # Create session in memory
-        app.session_manager.create_session(user_id=user.id)
+        # Set stage to AWAITING_USERNAME
+        app.auth_state_manager.set_stage(user.id, AuthStage.AWAITING_USERNAME)
 
         # Log audit and alert admin
         event = AuditEvent(
             user_id=user.id,
             chat_id=chat.id,
             message_id=message.message_id,
-            event_type="login_success",
+            event_type="login_totp_verified",
             decision="allowed",
             reason="totp_verified",
         )
-        alert_msg = f"🔔 <b>Thông báo:</b> Quản trị viên <code>{user.id}</code> vừa đăng nhập thành công vào hệ thống."
+        alert_msg = f"🔔 <b>Thông báo:</b> Quản trị viên <code>{user.id}</code> vừa xác thực TOTP thành công. Đang chờ nhập tài khoản Linux."
         await app.audit_logger.log_and_alert(event, alert_message=alert_msg)
 
-        await chat.send_message(messages.MSG_LOGIN_SUCCESS, parse_mode=ParseMode.HTML)
+        await chat.send_message(
+            "✅ <b>Xác thực TOTP thành công!</b>\nVui lòng nhập tên tài khoản Linux trên máy chủ (ví dụ: <code>root</code>, <code>ubuntu</code>, <code>guest</code>):",
+            parse_mode=ParseMode.HTML,
+        )
     elif reason.startswith("account_locked"):
         seconds = reason.split(":")[1] if ":" in reason else "300"
         event = AuditEvent(
@@ -100,7 +104,7 @@ async def login_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
 
 
 async def logout_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    """Handle /logout command."""
+    """Handle /logout: close terminals, reset user account, keep TOTP active, return to username step."""
     app: BotApplication = context.application.bot_data["app_state"]
     user = update.effective_user
     chat = update.effective_chat
@@ -109,7 +113,8 @@ async def logout_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
     if not user or not chat:
         return
 
-    app.session_manager.destroy_session(user.id)
+    await app.pty_session_manager.close_all_terminals(user.id)
+    app.auth_state_manager.logout_to_username(user.id)
 
     event = AuditEvent(
         user_id=user.id,
@@ -117,8 +122,41 @@ async def logout_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
         message_id=message.message_id if message else None,
         event_type="logout",
         decision="allowed",
-        reason="user_logout",
+        reason="user_logout_to_username",
     )
     app.audit_logger.log(event)
 
-    await chat.send_message(messages.MSG_LOGOUT_SUCCESS, parse_mode=ParseMode.HTML)
+    await chat.send_message(
+        "🔒 <b>Đã đăng xuất khỏi tài khoản Linux.</b> Phiên xác thực TOTP vẫn còn hiệu lực.\nVui lòng nhập tên tài khoản Linux để đăng nhập tiếp:",
+        parse_mode=ParseMode.HTML,
+    )
+
+
+async def exit_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Handle /exit: completely terminate session, close terminals, require full /start or /login."""
+    app: BotApplication = context.application.bot_data["app_state"]
+    user = update.effective_user
+    chat = update.effective_chat
+    message = update.effective_message
+
+    if not user or not chat:
+        return
+
+    await app.pty_session_manager.close_all_terminals(user.id)
+    app.session_manager.destroy_session(user.id)
+    app.auth_state_manager.exit_to_unauthenticated(user.id)
+
+    event = AuditEvent(
+        user_id=user.id,
+        chat_id=chat.id,
+        message_id=message.message_id if message else None,
+        event_type="exit",
+        decision="allowed",
+        reason="user_exit_all",
+    )
+    app.audit_logger.log(event)
+
+    await chat.send_message(
+        "👋 <b>Đã thoát hoàn toàn khỏi hệ thống.</b>\nVui lòng sử dụng <code>/start</code> hoặc <code>/login</code> để bắt đầu lại từ đầu.",
+        parse_mode=ParseMode.HTML,
+    )

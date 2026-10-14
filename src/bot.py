@@ -27,21 +27,28 @@ from telegram.ext import (
 
 from src.audit import AuditEvent, AuditLogger
 from src.auth.confirmation import ConfirmationManager
+from src.auth.pam_verifier import LinuxPAMVerifier
 from src.auth.session import SessionManager
+from src.auth.state import AuthStateManager
 from src.auth.totp import TOTPManager
 from src.config import Config
 from src.executor.jobs import JobManager
 from src.executor.native_bridge import NativeExecutionBridge
+from src.executor.pty_session import PTYSessionManager
 from src.executor.terminals import TerminalGateway
-from src.handlers.auth import login_handler, logout_handler
+from src.handlers.auth import exit_handler, login_handler, logout_handler
 from src.handlers.command import confirmation_callback_handler, run_handler
 from src.handlers.error import error_handler
 from src.handlers.system import (
-    dot_command_dispatcher,
+    close_handler,
     help_handler,
     jobs_handler,
     kill_handler,
+    new_terminal_handler,
     status_handler,
+    stop_handler,
+    switch_terminal_handler,
+    terminals_handler,
     whoami_handler,
 )
 from src.identity import IdentityFilter
@@ -80,6 +87,8 @@ class BotApplication:
             idle_timeout_seconds=self.config.limits.session_idle_timeout_seconds,
             absolute_timeout_seconds=self.config.limits.session_absolute_timeout_seconds,
         )
+        self.auth_state_manager = AuthStateManager()
+        self.pam_verifier = LinuxPAMVerifier()
         self.confirmation_manager = ConfirmationManager(
             default_expiry_seconds=self.config.limits.confirmation_timeout_seconds
         )
@@ -93,6 +102,7 @@ class BotApplication:
             rate_limit_commands_per_minute=self.config.limits.rate_limit_commands_per_minute,
         )
         self.native_bridge = NativeExecutionBridge()
+        self.pty_session_manager = PTYSessionManager()
 
         # 6. Multi-terminal gateways per user
         self.terminal_gateways: dict[int, TerminalGateway] = {}
@@ -135,15 +145,28 @@ class BotApplication:
         # Command handlers
         app.add_handler(CommandHandler("login", login_handler))
         app.add_handler(CommandHandler("logout", logout_handler))
+        app.add_handler(CommandHandler("exit", exit_handler))
+        app.add_handler(CommandHandler("stop", stop_handler))
+        app.add_handler(CommandHandler(["new", "newterminal", "n"], new_terminal_handler))
+        app.add_handler(CommandHandler(["terminals", "list"], terminals_handler))
+        app.add_handler(CommandHandler("close", close_handler))
+        app.add_handler(CommandHandler("terminal", switch_terminal_handler))
+
+        # Register /t1 .. /t10
+        def _make_switch(num: int):
+            async def handler(u: Update, c: ContextTypes.DEFAULT_TYPE) -> None:
+                await switch_terminal_handler(u, c, terminal_num=num)
+            return handler
+
+        for i in range(1, 11):
+            app.add_handler(CommandHandler(f"t{i}", _make_switch(i)))
+
         app.add_handler(CommandHandler("run", run_handler))
         app.add_handler(CommandHandler("status", status_handler))
         app.add_handler(CommandHandler("whoami", whoami_handler))
         app.add_handler(CommandHandler("jobs", jobs_handler))
         app.add_handler(CommandHandler("kill", kill_handler))
         app.add_handler(CommandHandler("help", help_handler))
-
-        # Dot command dispatcher (.stop, .new, .t1..10, etc.)
-        app.add_handler(MessageHandler(filters.TEXT & filters.Regex(r"^\."), dot_command_dispatcher))
 
         # Confirmation callback queries
         app.add_handler(CallbackQueryHandler(confirmation_callback_handler))

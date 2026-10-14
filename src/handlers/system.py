@@ -164,70 +164,130 @@ async def help_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
     await chat.send_message(body, parse_mode=ParseMode.HTML)
 
 
-async def dot_command_dispatcher(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    """Intercept and handle dot commands (.stop, .new, .t1..10, .terminals, .close)."""
+async def stop_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Handle /stop: send SIGINT (Ctrl+C) to active terminal process."""
     app: BotApplication = context.application.bot_data["app_state"]
-    message = update.effective_message
-    user = update.effective_user
     chat = update.effective_chat
-
-    if not message or not user or not chat or not message.text:
+    user = update.effective_user
+    if not chat or not user:
         return
 
-    parsed = parse_dot_command(message.text)
-    if not parsed:
+    term = app.pty_session_manager.get_active_terminal(user.id)
+    if term:
+        term.stop_requested = True
+    await chat.send_message(
+        "🛑 <b>Đã gửi tín hiệu ngắt (Ctrl+C) tới tiến trình đang chạy.</b>",
+        parse_mode=ParseMode.HTML,
+    )
+
+
+async def new_terminal_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Handle /new [username]: open new terminal for current user or prompt password for target user."""
+    app: BotApplication = context.application.bot_data["app_state"]
+    chat = update.effective_chat
+    user = update.effective_user
+    if not chat or not user:
         return
 
-    session = app.session_manager.get_session(user.id)
-    if not session:
-        await chat.send_message(messages.MSG_NOT_LOGGED_IN, parse_mode=ParseMode.HTML)
-        return
-    session.touch()
+    from src.auth.state import AuthStage
 
-    cmd_type, args = parsed
-    gw = app.get_or_create_terminal_gateway(user.id)
-
-    # 1. Stop command (.stop)
-    if cmd_type == "stop":
-        active_t = gw.get_active_terminal()
-        active_t.request_stop()
+    args = context.args or []
+    if args:
+        target_user = args[0].strip()
+        app.auth_state_manager.set_stage(
+            user.id,
+            AuthStage.AWAITING_NEW_TERMINAL_PASSWORD,
+            target_new_terminal_username=target_user,
+        )
         await chat.send_message(
-            messages.MSG_TERMINAL_STOPPED.format(tid=active_t.terminal_id),
+            f"🔑 Vui lòng nhập mật khẩu cho tài khoản <code>{target_user}</code> để tạo terminal mới (tin nhắn sẽ được xóa ngay):",
             parse_mode=ParseMode.HTML,
         )
         return
 
-    # 2. New terminal (.new, .n)
-    if cmd_type == "new":
-        success, new_id, msg = gw.open_new_terminal()
-        await chat.send_message(msg, parse_mode=ParseMode.HTML)
+    # No args: open terminal for current active user
+    active_user = app.auth_state_manager.get_active_username(user.id) or "root"
+    try:
+        term = await app.pty_session_manager.create_terminal(user.id, active_user)
+        banner = app.pty_session_manager.format_terminal_prompt(user.id, term.terminal_id)
+        await chat.send_message(
+            f"<pre><code class='language-text'>{banner}</code></pre>",
+            parse_mode=ParseMode.HTML,
+        )
+    except ValueError as exc:
+        await chat.send_message(f"❌ {exc}", parse_mode=ParseMode.HTML)
+
+
+async def switch_terminal_handler(
+    update: Update,
+    context: ContextTypes.DEFAULT_TYPE,
+    terminal_num: int | None = None,
+) -> None:
+    """Handle /t1..10 or /terminal <N>: switch active terminal."""
+    app: BotApplication = context.application.bot_data["app_state"]
+    chat = update.effective_chat
+    user = update.effective_user
+    if not chat or not user:
         return
 
-    # 3. Switch terminal (.t1 .. .t10)
-    if cmd_type == "switch" and args:
-        try:
+    target_id = terminal_num
+    if target_id is None:
+        args = context.args or []
+        if args and args[0].isdigit():
             target_id = int(args[0])
-            success, msg = gw.switch_terminal(target_id)
-            await chat.send_message(msg, parse_mode=ParseMode.HTML)
-        except ValueError:
-            await chat.send_message("❌ ID terminal không hợp lệ.", parse_mode=ParseMode.HTML)
+        else:
+            await chat.send_message("❌ Vui lòng chỉ định số terminal (ví dụ: /t1, /t2 hoặc /terminal 1).", parse_mode=ParseMode.HTML)
+            return
+
+    switched, msg = app.pty_session_manager.switch_terminal(user.id, target_id)
+    if not switched:
+        await chat.send_message(f"❌ {msg}", parse_mode=ParseMode.HTML)
         return
 
-    # 4. List terminals (.terminals, .list)
-    if cmd_type == "list":
-        terminals_list = gw.list_terminals()
-        lines = [messages.MSG_TERMINAL_LIST_HEADER]
-        for t in terminals_list:
-            mark = " 👈 <i>(đang chọn)</i>" if t["is_active"] else ""
-            lines.append(
-                f"• <b>Terminal #{t['id']}</b>: <code>{t['state']}</code>{mark}"
-            )
-        await chat.send_message("\n".join(lines), parse_mode=ParseMode.HTML)
+    banner = app.pty_session_manager.format_terminal_prompt(user.id, target_id)
+    await chat.send_message(
+        f"<pre><code class='language-text'>{banner}</code></pre>",
+        parse_mode=ParseMode.HTML,
+    )
+
+
+async def terminals_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Handle /terminals: list all active terminals for user."""
+    app: BotApplication = context.application.bot_data["app_state"]
+    chat = update.effective_chat
+    user = update.effective_user
+    if not chat or not user:
         return
 
-    # 5. Close terminal (.close)
-    if cmd_type == "close":
-        target = int(args[0]) if args and args[0].isdigit() else None
-        success, msg = gw.close_terminal(target)
-        await chat.send_message(msg, parse_mode=ParseMode.HTML)
+    terms = app.pty_session_manager.list_terminals(user.id)
+    if not terms:
+        await chat.send_message("❌ Chưa có terminal nào đang mở. Sử dụng <code>/new</code> để mở terminal mới.", parse_mode=ParseMode.HTML)
         return
+
+    active_term = app.pty_session_manager.get_active_terminal(user.id)
+    lines = ["🖥️ <b>Danh sách Terminal đang hoạt động:</b>\n"]
+    for t in terms:
+        is_active = (active_term and active_term.terminal_id == t.terminal_id)
+        mark = " 👈 <i>(đang kích hoạt)</i>" if is_active else ""
+        time_str = t.login_time.strftime("%d/%m/%Y %H:%M:%S")
+        lines.append(
+            f"• <b>Terminal #{t.terminal_id}</b> [<code>{t.username}</code>] - đăng nhập: <code>{time_str}</code>{mark}"
+        )
+
+    await chat.send_message("\n".join(lines), parse_mode=ParseMode.HTML)
+
+
+async def close_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Handle /close [N]: close active or specified terminal."""
+    app: BotApplication = context.application.bot_data["app_state"]
+    chat = update.effective_chat
+    user = update.effective_user
+    if not chat or not user:
+        return
+
+    args = context.args or []
+    target_id = int(args[0]) if (args and args[0].isdigit()) else None
+
+    success, msg = await app.pty_session_manager.close_terminal(user.id, target_id)
+    prefix = "✅" if success else "❌"
+    await chat.send_message(f"{prefix} {msg}", parse_mode=ParseMode.HTML)
