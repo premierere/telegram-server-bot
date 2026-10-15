@@ -115,3 +115,14 @@ def test_pty_fork_execution_simulation(monkeypatch):
     verifier = LinuxPAMVerifier(mock_backend=False)
     success = verifier._verify_via_pty_fork("ubuntu", "SecretPass123")
     assert success is True
+
+
+@pytest.mark.asyncio
+async def test_mobile_trailing_space_password_handling():
+    verifier = LinuxPAMVerifier(mock_backend=True)
+    verifier.set_mock_account("ubuntu", "MySuperPassword")
+
+    # Mobile virtual keyboard auto-appends a space: "MySuperPassword "
+    success, err = await verifier.verify_credentials("ubuntu", "MySuperPassword ")
+    assert success is True
+    assert err == ""

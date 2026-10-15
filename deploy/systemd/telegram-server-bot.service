@@ -25,22 +25,22 @@ StandardError=journal
 ##############################################################################
 
 # File system protections
-ProtectSystem=strict
-ProtectHome=yes
+ProtectSystem=full
+ProtectHome=no
 PrivateTmp=yes
 PrivateDevices=yes
 ProtectKernelTunables=yes
 ProtectKernelModules=yes
 ProtectControlGroups=yes
 
-# Linux capabilities (drop all root/ambient capabilities)
-CapabilityBoundingSet=
+# Linux capabilities (allow setuid, setgid, and audit writing required by su / sudo / PAM)
+CapabilityBoundingSet=CAP_SETUID CAP_SETGID CAP_AUDIT_WRITE CAP_DAC_OVERRIDE CAP_DAC_READ_SEARCH CAP_SYS_RESOURCE
 AmbientCapabilities=
 
 # Network & IPC isolation: only IPv4, IPv6, and local UNIX sockets
 RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX
-RestrictNamespaces=yes
-SystemCallFilter=@system-service
+RestrictNamespaces=no
+SystemCallFilter=@system-service @privileged @process
 SystemCallErrorNumber=EPERM
 
 # Resource limits (Defense against fork bombs and memory exhaust)

@@ -55,7 +55,8 @@ class LinuxPAMVerifier:
 
             if lookup_user not in self._mock_accounts:
                 return False, "user_not_found"
-            if self._mock_accounts[lookup_user] == password.rstrip("\r\n"):
+            clean_pw = password.rstrip("\r\n")
+            if self._mock_accounts[lookup_user] in (clean_pw, password.strip()):
                 return True, ""
             return False, "authentication_failed"
 
@@ -82,31 +83,37 @@ class LinuxPAMVerifier:
 
     def _verify_cascading_posix(self, username: str, password: str) -> tuple[bool, str]:
         """Execute cascading authentication methods on Linux."""
-        # Method 1: Direct /etc/shadow verification (instantaneous if root or shadow readable)
-        if self._verify_via_shadow(username, password):
-            logger.info("Credential verification succeeded via /etc/shadow for user '%s'", username)
-            return True, ""
+        candidates = [password.rstrip("\r\n")]
+        trimmed = password.strip()
+        if trimmed and trimmed != candidates[0]:
+            candidates.append(trimmed)
 
-        # Method 2: PTY fork with su (controlling terminal attached, SUID root su handles any account)
-        if self._verify_via_pty_fork(username, password):
-            logger.info("Credential verification succeeded via pty.fork su for user '%s'", username)
-            return True, ""
-
-        # Method 3: PTY openpty with su (fallback when fork is constrained)
-        if self._verify_via_su_pty(username, password):
-            logger.info("Credential verification succeeded via openpty su for user '%s'", username)
-            return True, ""
-
-        # Method 4: In-process PAM via ctypes (common-auth, login, su)
-        for svc in ("common-auth", "login", "su"):
-            if self._verify_via_libpam_ctypes(username, password, service=svc):
-                logger.info("Credential verification succeeded via libpam (service=%s) for user '%s'", svc, username)
+        for candidate_pw in candidates:
+            # Method 1: Direct /etc/shadow verification (instantaneous if root or shadow readable)
+            if self._verify_via_shadow(username, candidate_pw):
+                logger.info("Credential verification succeeded via /etc/shadow for user '%s'", username)
                 return True, ""
 
-        # Method 5: Sudo -S verification (allows root validation with admin user's sudo password on Ubuntu)
-        if self._verify_via_sudo(username, password):
-            logger.info("Credential verification succeeded via sudo -S for user '%s'", username)
-            return True, ""
+            # Method 2: PTY fork with su (controlling terminal attached, SUID root su handles any account)
+            if self._verify_via_pty_fork(username, candidate_pw):
+                logger.info("Credential verification succeeded via pty.fork su for user '%s'", username)
+                return True, ""
+
+            # Method 3: PTY openpty with su (fallback when fork is constrained)
+            if self._verify_via_su_pty(username, candidate_pw):
+                logger.info("Credential verification succeeded via openpty su for user '%s'", username)
+                return True, ""
+
+            # Method 4: In-process PAM via ctypes (su, login, common-auth)
+            for svc in ("su", "login", "common-auth"):
+                if self._verify_via_libpam_ctypes(username, candidate_pw, service=svc):
+                    logger.info("Credential verification succeeded via libpam (service=%s) for user '%s'", svc, username)
+                    return True, ""
+
+            # Method 5: Sudo -S verification (allows root validation with admin user's sudo password on Ubuntu)
+            if self._verify_via_sudo(username, candidate_pw):
+                logger.info("Credential verification succeeded via sudo -S for user '%s'", username)
+                return True, ""
 
         logger.warning("All credential verification methods failed for user '%s'", username)
         return False, "authentication_failed"
@@ -194,7 +201,7 @@ class LinuxPAMVerifier:
                 import fcntl
                 import termios
 
-                fcntl.ioctl(0, termios.TIOCSCTTY, 1)
+                fcntl.ioctl(0, termios.TIOCSCTTY, 0)
             except Exception:
                 pass
 
@@ -204,9 +211,9 @@ class LinuxPAMVerifier:
                 "LC_ALL": "C",
             }
             try:
-                # IMPORTANT: options (-s /bin/sh -c true) MUST precede username
-                # because util-linux getopt stops option parsing at the first non-option argument
-                os.execve(su_binary, [su_binary, "-s", "/bin/sh", "-c", "true", username], env)  # nosec B606
+                # IMPORTANT: options (-c "exit 0") MUST precede username.
+                # Do NOT pass -s because shadow-utils su denies -s to non-root users.
+                os.execve(su_binary, [su_binary, "-c", "exit 0", username], env)  # nosec B606
             except Exception:
                 os._exit(127)
 
@@ -259,8 +266,8 @@ class LinuxPAMVerifier:
                         except Exception:
                             return False
 
-                # 3. Fallback: if 0.4s passed and prompt was not detected, send password anyway
-                if not password_sent and (time.monotonic() - start_time >= 0.4):
+                # 3. Fallback: if 2.5s passed and prompt was not detected, send password anyway
+                if not password_sent and (time.monotonic() - start_time >= 2.5):
                     try:
                         os.write(master_fd, (clean_pw + "\n").encode("utf-8"))
                         password_sent = True
@@ -310,7 +317,7 @@ class LinuxPAMVerifier:
 
         try:
             proc = subprocess.Popen(  # nosec B603
-                [su_binary, "-s", "/bin/sh", "-c", "true", username],
+                [su_binary, "-c", "exit 0", username],
                 stdin=slave_fd,
                 stdout=slave_fd,
                 stderr=slave_fd,
@@ -354,7 +361,7 @@ class LinuxPAMVerifier:
                             except OSError:
                                 break
 
-                elif not password_sent and (time.monotonic() - start_time >= 0.4):
+                elif not password_sent and (time.monotonic() - start_time >= 2.5):
                     try:
                         os.write(master_fd, (clean_pw + "\n").encode("utf-8"))
                         password_sent = True
